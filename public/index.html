@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RAVI — boutique en ligne</title>
+<meta name="description" content="Sélection d'objets pour la maison, le jardin, le gaming et vos animaux. Livraison suivie, retour gratuit sous 30 jours.">
+<meta name="theme-color" content="#17171a">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛍️</text></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="wordmark" href="#/" id="wordmark">RAVI</a>
+    <div class="header-actions">
+      <button class="icon-btn" id="searchToggle" aria-label="Rechercher">🔍</button>
+      <a class="icon-btn" href="#/panier" aria-label="Panier">
+        🛒<span class="cart-count hidden" id="cartCount">0</span>
+      </a>
+    </div>
+  </div>
+  <div class="wrap searchbar hidden" id="searchBar">
+    <input type="search" id="searchInput" placeholder="Rechercher un produit…" autocomplete="off">
+  </div>
+</header>
+
+<nav class="cat-strip" id="catStrip"></nav>
+
+<main id="app" class="wrap"></main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-cols">
+      <div>
+        <div class="wordmark" style="letter-spacing:.22em">RAVI</div>
+        <p class="small muted" style="margin-top:10px" id="footerTagline"></p>
+      </div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:8px">Boutique</div>
+        <a href="#/">Accueil</a>
+        <a href="#/suivi">Suivre ma commande</a>
+        <a href="#/panier">Mon panier</a>
+      </div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:8px">Aide</div>
+        <a href="#/infos">Livraison &amp; retours</a>
+        <a href="#/infos">Mentions légales</a>
+        <a href="#" id="contactLink">Nous contacter</a>
+      </div>
+    </div>
+
+    <!-- Accès à l'espace d'administration -->
+    <div class="admin-entry">
+      <a class="btn btn-sm" href="/admin">⚙️ Espace admin</a>
+    </div>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
