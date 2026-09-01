@@ -1,0 +1,30 @@
+# ==================================================================
+#  Labo d'entraînement au pentest — cibles VOLONTAIREMENT vulnérables
+# ==================================================================
+#  Ces applications contiennent des failles EXPRÈS, pour s'entraîner.
+#  Elles sont liées à 127.0.0.1 uniquement : injoignables depuis
+#  l'extérieur du VPS. On y accède via le tableau de bord (authentifié)
+#  ou par un tunnel SSH. NE JAMAIS les exposer sur Internet.
+# ==================================================================
+
+services:
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    container_name: lab-juiceshop
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+
+  dvwa:
+    image: ghcr.io/digininja/dvwa:latest
+    container_name: lab-dvwa
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3002:80"
+
+  webgoat:
+    image: webgoat/webgoat:latest
+    container_name: lab-webgoat
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3003:8080"
