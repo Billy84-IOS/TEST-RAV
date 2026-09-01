@@ -544,7 +544,7 @@ async function callNocturai(message) {
     res = await fetchWithTimeout(NOCTURAI_URL, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, model: 'code' }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: message }], model: 'code' }),
     }, 45000);
   } catch (e) {
     throw new Error('API nocturai injoignable : ' + e.message);
