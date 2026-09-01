@@ -8,7 +8,7 @@ const appEl = document.getElementById('app');
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
 
-let currentTab = 'labo';
+let currentTab = 'accueil';
 let labData = null;
 
 const esc = (s) =>
@@ -398,11 +398,13 @@ async function renderParcours() {
 
 /* ------------------------------ onglet : outils ------------------------------ */
 
+let outilsView = 'outils';
+
 async function renderOutils() {
   view.innerHTML = LEGAL + '<div class="empty">Chargement…</div>';
-  const { tools } = await api('/api/tools');
+  const { tools, payloads } = await api('/api/tools');
 
-  const cards = tools
+  const toolCards = tools
     .map(
       (t) => `
     <div class="card tool">
@@ -422,16 +424,48 @@ async function renderOutils() {
     )
     .join('');
 
+  const payloadCards = (payloads || [])
+    .map(
+      (p) => `
+    <div class="card">
+      <h2>${esc(p.name)}</h2>
+      ${p.items
+        .map(
+          (it) => `
+        <div class="lbl" style="margin-top:10px">${esc(it.label)}</div>
+        <div class="cmd">
+          <code class="mono">${esc(it.value)}</code>
+          <button class="btn btn-sm copy" data-cmd="${esc(it.value)}">Copier</button>
+        </div>`
+        )
+        .join('')}
+    </div>`
+    )
+    .join('');
+
   view.innerHTML =
     LEGAL +
     `<div class="section-title"><h1>Aide-mémoire</h1></div>
-     <p class="small muted" style="margin-bottom:14px">Commandes déjà cadrées sur les cibles du labo (127.0.0.1). Copie-les dans le Terminal. Adapte les ports et paramètres selon la cible.</p>
-     <div class="grid">${cards}</div>`;
+     <div class="filters" id="outilsTabs">
+       <button class="${outilsView === 'outils' ? 'active' : ''}" data-ov="outils">Commandes</button>
+       <button class="${outilsView === 'payloads' ? 'active' : ''}" data-ov="payloads">Payloads</button>
+     </div>
+     ${
+       outilsView === 'outils'
+         ? `<p class="small muted" style="margin-bottom:14px">Commandes cadrées sur le labo (127.0.0.1). Copie-les dans le Terminal, adapte le port selon la cible.</p><div class="grid">${toolCards}</div>`
+         : `<div class="legal" style="margin-top:0">⚠️<div>Ces charges utiles ne se testent QUE sur le labo ou une cible autorisée. Elles sont là comme référence.</div></div><div class="grid">${payloadCards}</div>`
+     }`;
 
+  document.getElementById('outilsTabs').onclick = (e) => {
+    const b = e.target.closest('[data-ov]');
+    if (!b) return;
+    outilsView = b.dataset.ov;
+    renderOutils();
+  };
   view.querySelectorAll('.copy').forEach((b) => {
     b.onclick = () => {
       navigator.clipboard.writeText(b.dataset.cmd).then(
-        () => toast('Commande copiée'),
+        () => toast('Copié'),
         () => toast('Copie impossible')
       );
     };
@@ -465,9 +499,18 @@ function renderReglages() {
       </div>
     </div>
 
+    <div class="card" style="margin-bottom:14px">
+      <h2>Sauvegarde des données</h2>
+      <p class="small muted" style="margin-top:8px">Télécharge tes missions, notes et progression (le mot de passe n'est jamais inclus). À garder précieusement.</p>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-sm" id="backupBtn">⬇ Télécharger la sauvegarde</button>
+        <label class="btn btn-sm" style="cursor:pointer">⬆ Restaurer<input type="file" id="restoreInput" accept="application/json" hidden></label>
+      </div>
+    </div>
+
     <div class="card">
       <h2>À propos du labo</h2>
-      <p class="small muted" style="margin-top:10px">Toutes tes données (progression, notes, mot de passe) sont dans <code class="mono">data/lab.json</code> sur ton VPS. Sauvegarde ce fichier de temps en temps.</p>
+      <p class="small muted" style="margin-top:10px">Toutes tes données sont dans <code class="mono">data/lab.json</code> sur ton VPS.</p>
       <p class="small muted" style="margin-top:10px">Gérer les services : <br>
         <code class="mono">sudo systemctl restart hacklab</code><br>
         <code class="mono">docker compose ps</code> (état des cibles)</p>
@@ -504,6 +547,23 @@ function renderReglages() {
       toast('Thème ' + (theme === 'dark' ? 'sombre' : 'clair'));
     };
   });
+
+  document.getElementById('backupBtn').onclick = () => downloadUrl('/api/backup');
+  document.getElementById('restoreInput').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (!confirm('Restaurer remplace tes missions, notes et progression actuelles. Continuer ?')) return;
+      try {
+        await api('/api/restore', { method: 'POST', body: reader.result });
+        toast('Données restaurées');
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
 }
 
 /* ------------------------------ onglet : missions ------------------------------ */
@@ -704,6 +764,11 @@ function renderMissionDetail(m) {
        <div class="field"><label>Contact Discord</label><input id="ms-d-discord" type="text" value="${esc(m.discord || '')}"></div>
        <div class="field"><label>Domaine / URL</label><input id="ms-d-domain" type="text" value="${esc(m.domain || '')}"></div>
        <div class="field"><label>Fenêtre de test</label><input id="ms-d-window" type="text" value="${esc(m.window || '')}" placeholder="Ex. samedi 20h–23h"></div>
+       <div class="grid-2">
+         <div class="field"><label>Début</label><input id="ms-d-startDate" type="date" value="${esc(m.startDate || '')}"></div>
+         <div class="field"><label>Fin</label><input id="ms-d-endDate" type="date" value="${esc(m.endDate || '')}"></div>
+       </div>
+       <div class="field"><label>Budget / prix</label><input id="ms-d-budget" type="text" value="${esc(m.budget || '')}" placeholder="Ex. 250 €"></div>
        <div class="field"><label>Statut</label><select id="ms-d-status">${statusOptions}</select></div>
      </div>
 
@@ -737,11 +802,24 @@ function renderMissionDetail(m) {
      </div>
 
      <div class="card" style="margin-bottom:12px">
-       <h2>Rapport</h2>
-       <button class="btn btn-block" id="ms-gen-report" style="margin-top:10px">Générer le rapport</button>
+       <h2>Rapport &amp; export</h2>
+       <button class="btn btn-block" id="ms-gen-report" style="margin-top:10px">Aperçu du rapport</button>
        <textarea id="ms-report" readonly class="hidden" style="min-height:220px;margin-top:10px"></textarea>
-       <button class="btn btn-sm btn-block hidden" id="ms-copy-report" style="margin-top:8px">📋 Copier le rapport</button>
+       <button class="btn btn-sm btn-block hidden" id="ms-copy-report" style="margin-top:8px">📋 Copier</button>
+       <div class="btn-row" style="margin-top:10px">
+         <button class="btn btn-sm" id="ms-dl-report">⬇ Rapport (.md)</button>
+         <button class="btn btn-sm" id="ms-dl-json">⬇ Mission (.json)</button>
+       </div>
      </div>
+
+     ${
+       (m.activity || []).length
+         ? `<div class="card" style="margin-bottom:12px"><h2>Journal</h2><div class="timeline-lite" style="margin-top:10px">${(m.activity || [])
+             .slice(0, 20)
+             .map((a) => `<div class="kv"><span class="k">${esc(a.text)}</span><span class="v tiny">${new Date(a.at).toLocaleString('fr-FR')}</span></div>`)
+             .join('')}</div></div>`
+         : ''
+     }
 
      <button class="btn btn-primary btn-block" id="ms-save">Enregistrer la mission</button>
      <button class="btn btn-danger btn-block" id="ms-delete" style="margin-top:10px">Supprimer la mission</button>`;
@@ -840,6 +918,9 @@ function renderMissionDetail(m) {
       () => toast('Copie impossible')
     );
   };
+
+  document.getElementById('ms-dl-report').onclick = () => downloadUrl('/api/missions/' + m.id + '/report.md');
+  document.getElementById('ms-dl-json').onclick = () => downloadUrl('/api/missions/' + m.id + '/export');
 
   document.getElementById('ms-gen-report').onclick = () => {
     const report = genReport(collectMissionFields(m));
@@ -1048,6 +1129,9 @@ function collectMissionFields(m) {
   if (g('ms-d-discord') !== undefined) m.discord = g('ms-d-discord');
   if (g('ms-d-domain') !== undefined) m.domain = g('ms-d-domain');
   if (g('ms-d-window') !== undefined) m.window = g('ms-d-window');
+  if (g('ms-d-budget') !== undefined) m.budget = g('ms-d-budget');
+  if (g('ms-d-startDate') !== undefined) m.startDate = g('ms-d-startDate');
+  if (g('ms-d-endDate') !== undefined) m.endDate = g('ms-d-endDate');
   if (g('ms-d-scope') !== undefined) m.scope = g('ms-d-scope');
   if (g('ms-d-status') !== undefined) m.status = g('ms-d-status');
   return m;
@@ -1074,16 +1158,158 @@ async function saveMission(m, notify) {
   }
 }
 
+/* ------------------------------ onglet : accueil ------------------------------ */
+
+function goTab(tab) {
+  document.querySelectorAll('#tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  currentTab = tab;
+  renderTab();
+}
+
+function downloadUrl(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function renderAccueil() {
+  view.innerHTML = LEGAL + '<div class="empty">Chargement…</div>';
+  const o = await api('/api/overview');
+  const sevMeta = (id) => (o.severities.find((s) => s.id === id) || { label: id, tone: 'off' });
+  const totalFindings = Object.values(o.findingsBySeverity).reduce((a, b) => a + b, 0);
+  const sevBadges = o.severities
+    .filter((s) => o.findingsBySeverity[s.id])
+    .map((s) => `<span class="badge badge-${s.tone}">${o.findingsBySeverity[s.id]} ${esc(s.label.toLowerCase())}</span>`)
+    .join(' ') || '<span class="tiny muted">aucune faille enregistrée</span>';
+
+  view.innerHTML =
+    LEGAL +
+    `<div class="section-title"><h1>Tableau de bord</h1></div>
+     <div class="stat-grid">
+       <div class="stat"><div class="k">Cibles actives</div><div class="v">${o.lab.running}/${o.lab.total}</div><div class="s">${o.lab.available ? 'Docker OK' : 'Docker absent'}</div></div>
+       <div class="stat"><div class="k">Progression</div><div class="v">${o.parcours.pct}%</div><div class="s">${o.parcours.done}/${o.parcours.total} étapes</div></div>
+       <div class="stat"><div class="k">Missions</div><div class="v">${o.missions.total}</div><div class="s">clients suivis</div></div>
+       <div class="stat"><div class="k">Failles</div><div class="v">${totalFindings}</div><div class="s">toutes missions</div></div>
+     </div>
+
+     <div class="card" style="margin-top:14px">
+       <h2>Répartition des failles</h2>
+       <div class="btn-row" style="margin-top:10px">${sevBadges}</div>
+     </div>
+
+     <div class="card" style="margin-top:12px">
+       <div class="spread"><h2>Accès rapide</h2></div>
+       <div class="btn-row" style="margin-top:12px">
+         <button class="btn btn-sm" data-go="labo">🎯 Labo</button>
+         <button class="btn btn-sm" data-go="terminal">⌨️ Terminal</button>
+         <button class="btn btn-sm" data-go="outils">🧰 Outils &amp; payloads</button>
+         <button class="btn btn-sm" data-go="missions">📋 Missions</button>
+         <button class="btn btn-sm" data-go="notes">📝 Notes</button>
+       </div>
+       <p class="tiny muted" style="margin-top:10px">IA d'analyse : ${o.ai ? '<span style="color:var(--ok)">configurée</span>' : 'non configurée'}</p>
+     </div>
+
+     ${
+       o.recentMissions.length
+         ? `<div class="section-title"><h2>Dernières missions</h2></div>
+            <div class="list">${o.recentMissions
+              .map(
+                (m) => `<button class="list-item" data-open-mission="${esc(m.id)}">
+                  <div class="grow"><div class="t">${esc(m.client)}</div><div class="m">${esc(m.domain || '—')}</div></div>
+                  <div class="r"><span class="badge badge-${(o.statuses.find((s) => s.id === m.status) || {}).tone || 'off'}">${esc((o.statuses.find((s) => s.id === m.status) || {}).label || m.status)}</span><div class="tiny muted" style="margin-top:4px">${m.findings} faille(s)</div></div>
+                </button>`
+              )
+              .join('')}</div>`
+         : ''
+     }
+
+     <div class="card" style="margin-top:14px">
+       <h2>Installer l'appli</h2>
+       <p class="small muted" style="margin-top:8px">Dans Safari : bouton <b>Partager</b> → <b>Sur l'écran d'accueil</b>. HACKLAB s'ouvrira en plein écran comme une vraie application.</p>
+     </div>`;
+
+  view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => goTab(b.dataset.go)));
+  view.querySelectorAll('[data-open-mission]').forEach((b) => {
+    b.onclick = () => {
+      openMissionId = b.dataset.openMission;
+      goTab('missions');
+    };
+  });
+}
+
+/* ------------------------------ onglet : notes ------------------------------ */
+
+let notesCache = [];
+
+async function renderNotes() {
+  view.innerHTML = '<div class="section-title"><h1>Notes</h1></div><div class="empty">Chargement…</div>';
+  const { notes } = await api('/api/notedocs');
+  notesCache = notes;
+
+  view.innerHTML =
+    `<div class="section-title"><h1>Notes</h1><button class="btn btn-sm btn-primary" id="note-new">+ Nouvelle</button></div>
+     <p class="small muted" style="margin-bottom:12px">Ton carnet : commandes qui marchent, identifiants trouvés, idées à tester. Sauvegardé sur le serveur.</p>
+     ${
+       notes.length
+         ? '<div class="stack">' +
+           notes
+             .map(
+               (n) => `<div class="card">
+             <div class="field" style="margin-bottom:8px"><input type="text" value="${esc(n.title)}" data-note-title="${esc(n.id)}"></div>
+             <textarea data-note-body="${esc(n.id)}" style="min-height:120px">${esc(n.body)}</textarea>
+             <div class="btn-row" style="margin-top:8px">
+               <button class="btn btn-sm btn-primary" data-note-save="${esc(n.id)}">Enregistrer</button>
+               <button class="btn btn-sm btn-danger" data-note-del="${esc(n.id)}">Supprimer</button>
+               <span class="tiny muted" style="align-self:center">${new Date(n.at).toLocaleString('fr-FR')}</span>
+             </div>
+           </div>`
+             )
+             .join('') +
+           '</div>'
+         : '<div class="empty"><div class="ic">📝</div>Aucune note.</div>'
+     }`;
+
+  document.getElementById('note-new').onclick = async () => {
+    await api('/api/notedocs', { method: 'POST', body: JSON.stringify({ title: 'Nouvelle note', body: '' }) });
+    renderNotes();
+  };
+  view.querySelectorAll('[data-note-save]').forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.noteSave;
+      await api('/api/notedocs/' + id, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: document.querySelector('[data-note-title="' + id + '"]').value,
+          body: document.querySelector('[data-note-body="' + id + '"]').value,
+        }),
+      });
+      toast('Note enregistrée');
+    };
+  });
+  view.querySelectorAll('[data-note-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Supprimer cette note ?')) return;
+      await api('/api/notedocs/' + b.dataset.noteDel, { method: 'DELETE' });
+      renderNotes();
+    };
+  });
+}
+
 /* ------------------------------ routeur ------------------------------ */
 
 async function renderTab() {
   teardownTerm();
   try {
-    if (currentTab === 'labo') await renderLabo();
+    if (currentTab === 'accueil') await renderAccueil();
+    else if (currentTab === 'labo') await renderLabo();
     else if (currentTab === 'terminal') renderTerminal();
     else if (currentTab === 'parcours') await renderParcours();
     else if (currentTab === 'outils') await renderOutils();
     else if (currentTab === 'missions') await renderMissions();
+    else if (currentTab === 'notes') await renderNotes();
     else if (currentTab === 'reglages') renderReglages();
   } catch (e) {
     view.innerHTML = `<div class="empty"><div class="ic">⚠️</div>${esc(e.message)}</div>`;

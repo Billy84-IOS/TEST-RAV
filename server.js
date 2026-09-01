@@ -22,7 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 
-const { TARGETS, ROADMAP, TOOLS, MISSION_CHECKLIST, SEVERITIES, MISSION_STATUSES } = require('./lab-data');
+const { TARGETS, ROADMAP, TOOLS, MISSION_CHECKLIST, SEVERITIES, MISSION_STATUSES, PAYLOADS } = require('./lab-data');
 const MISSION_STATUS_IDS = MISSION_STATUSES.map((s) => s.id);
 const SEVERITY_IDS = SEVERITIES.map((s) => s.id);
 
@@ -68,6 +68,9 @@ function loadStore() {
     try {
       db = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
       if (!Array.isArray(db.missions)) db.missions = []; // migration
+      if (!Array.isArray(db.noteDocs)) db.noteDocs = []; // migration
+      if (!db.notes || typeof db.notes !== 'object') db.notes = {};
+      if (!db.progress || typeof db.progress !== 'object') db.progress = {};
     } catch (err) {
       fs.renameSync(STORE_FILE, STORE_FILE + '.corrompu-' + Date.now());
       db = null;
@@ -81,6 +84,7 @@ function loadStore() {
       passwordIsGenerated: !process.env.DASHBOARD_PASSWORD,
       progress: {}, // { moduleId: { itemIndex: true } }
       notes: {}, // { key: "texte" }
+      noteDocs: [], // [{ id, title, body, at }]
       missions: [],
       createdAt: new Date().toISOString(),
     };
@@ -211,6 +215,7 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 function serveFile(res, relativePath, cache) {
   const safe = path.normalize(relativePath).replace(/^(\.\.[/\\])+/, '');
@@ -520,6 +525,59 @@ async function scanTarget(rawUrl) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rapport Markdown                                                    */
+/* ------------------------------------------------------------------ */
+
+function reportSlug(s) {
+  return String(s || 'mission')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'mission';
+}
+
+function buildReportMarkdown(m) {
+  const sevLabel = (id) => (SEVERITIES.find((s) => s.id === id) || { label: id }).label;
+  const order = { critique: 0, elevee: 1, moyenne: 2, faible: 3, info: 4 };
+  const findings = [...(m.findings || [])].sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
+  const counts = {};
+  findings.forEach((f) => (counts[f.severity] = (counts[f.severity] || 0) + 1));
+  const today = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+
+  let out = '# Rapport de test d\'intrusion — CONFIDENTIEL\n\n';
+  out += '| | |\n|---|---|\n';
+  out += '| **Client** | ' + (m.client || '') + ' |\n';
+  out += '| **Cible** | ' + (m.domain || '') + ' |\n';
+  out += '| **Période** | ' + (m.window || m.startDate || '') + ' |\n';
+  out += '| **Date du rapport** | ' + today + ' |\n\n';
+
+  out += '## 1. Résumé\n\n';
+  out += findings.length + ' faille(s) identifiée(s).\n\n';
+  SEVERITIES.forEach((s) => {
+    if (counts[s.id]) out += '- **' + s.label + '** : ' + counts[s.id] + '\n';
+  });
+  out += '\n## 2. Périmètre\n\n' + (m.scope || '_(non précisé)_') + '\n\n';
+
+  out += '## 3. Failles identifiées\n\n';
+  if (!findings.length) out += '_Aucune faille identifiée dans le périmètre testé._\n\n';
+  else
+    findings.forEach((f, i) => {
+      out += '### ' + (i + 1) + '. [' + sevLabel(f.severity) + '] ' + (f.title || 'Sans titre') + '\n\n';
+      out += '**Description :** ' + (f.detail || '_à compléter_') + '\n\n';
+      if (f.solution) out += '**Correctif :** ' + f.solution + '\n\n';
+    });
+
+  out += '## 4. Recommandations générales\n\n';
+  out += '- Corriger en priorité les failles critiques et élevées.\n';
+  out += '- Maintenir à jour les composants (CMS, extensions, dépendances).\n';
+  out += '- Vérifier la validation des entrées et la gestion des sessions.\n\n';
+  out += '## 5. Conclusion\n\nRapport remis à titre confidentiel. Un nouveau test est conseillé après correction.\n';
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* Analyse IA (nocturai) — la clé n'est JAMAIS dans le dépôt           */
 /* ------------------------------------------------------------------ */
 
@@ -687,7 +745,87 @@ async function handleAPI(req, res, pathname) {
   }
 
   if (pathname === '/api/tools' && req.method === 'GET') {
-    return sendJSON(res, 200, { tools: TOOLS });
+    return sendJSON(res, 200, { tools: TOOLS, payloads: PAYLOADS });
+  }
+
+  /* --- tableau de bord (vue d'ensemble) --- */
+  if (pathname === '/api/overview' && req.method === 'GET') {
+    const status = await targetStatus();
+    const running = TARGETS.filter((t) => status.targets[t.id] && status.targets[t.id].state === 'running').length;
+    let items = 0;
+    let done = 0;
+    ROADMAP.forEach((m) => {
+      items += m.items.length;
+      done += Object.keys(db.progress[m.id] || {}).length;
+    });
+    const sev = {};
+    SEVERITY_IDS.forEach((s) => (sev[s] = 0));
+    db.missions.forEach((m) => (m.findings || []).forEach((f) => (sev[f.severity] = (sev[f.severity] || 0) + 1)));
+    const byStatus = {};
+    db.missions.forEach((m) => (byStatus[m.status] = (byStatus[m.status] || 0) + 1));
+    return sendJSON(res, 200, {
+      lab: { available: status.available, running, total: TARGETS.length },
+      parcours: { done, total: items, pct: items ? Math.round((done / items) * 100) : 0 },
+      missions: { total: db.missions.length, byStatus },
+      findingsBySeverity: sev,
+      severities: SEVERITIES,
+      statuses: MISSION_STATUSES,
+      ai: !!nocturaiKey(),
+      recentMissions: db.missions.slice(0, 5).map((m) => ({ id: m.id, client: m.client, domain: m.domain, status: m.status, findings: (m.findings || []).length })),
+    });
+  }
+
+  /* --- notes (carnet) --- */
+  if (pathname === '/api/notedocs' && req.method === 'GET') {
+    return sendJSON(res, 200, { notes: db.noteDocs });
+  }
+  if (pathname === '/api/notedocs' && req.method === 'POST') {
+    const body = await readBody(req);
+    const note = {
+      id: uid('note-'),
+      title: String(body.title || 'Sans titre').slice(0, 200),
+      body: String(body.body || '').slice(0, 50000),
+      at: new Date().toISOString(),
+    };
+    db.noteDocs.unshift(note);
+    saveStore();
+    return sendJSON(res, 201, { note });
+  }
+  const noteMatch = /^\/api\/notedocs\/([\w-]+)$/.exec(pathname);
+  if (noteMatch) {
+    const note = db.noteDocs.find((n) => n.id === noteMatch[1]);
+    if (!note) return sendJSON(res, 404, { error: 'Note introuvable.' });
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      if (typeof body.title === 'string') note.title = body.title.slice(0, 200);
+      if (typeof body.body === 'string') note.body = body.body.slice(0, 50000);
+      note.at = new Date().toISOString();
+      saveStore();
+      return sendJSON(res, 200, { note });
+    }
+    if (req.method === 'DELETE') {
+      db.noteDocs = db.noteDocs.filter((n) => n.id !== note.id);
+      saveStore();
+      return sendJSON(res, 200, { ok: true });
+    }
+  }
+
+  /* --- sauvegarde / restauration des données --- */
+  if (pathname === '/api/backup' && req.method === 'GET') {
+    const dump = { progress: db.progress, notes: db.notes, noteDocs: db.noteDocs, missions: db.missions, exportedAt: new Date().toISOString() };
+    const body = JSON.stringify(dump, null, 2);
+    return sendText(res, 200, body, 'application/json; charset=utf-8', {
+      'Content-Disposition': 'attachment; filename="hacklab-sauvegarde.json"',
+    });
+  }
+  if (pathname === '/api/restore' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (Array.isArray(body.missions)) db.missions = body.missions;
+    if (Array.isArray(body.noteDocs)) db.noteDocs = body.noteDocs;
+    if (body.progress && typeof body.progress === 'object') db.progress = body.progress;
+    if (body.notes && typeof body.notes === 'object') db.notes = body.notes;
+    saveStore();
+    return sendJSON(res, 200, { ok: true });
   }
 
   /* --- missions (prestations autorisées) --- */
@@ -710,10 +848,14 @@ async function handleAPI(req, res, pathname) {
       domain: String(body.domain || '').trim().slice(0, 200),
       window: String(body.window || '').trim().slice(0, 200),
       scope: String(body.scope || '').slice(0, 4000),
+      budget: String(body.budget || '').trim().slice(0, 60),
+      startDate: String(body.startDate || '').trim().slice(0, 40),
+      endDate: String(body.endDate || '').trim().slice(0, 40),
       status: 'brouillon',
       checklist: {},
       notes: '',
       findings: [],
+      activity: [{ at: new Date().toISOString(), text: 'Mission créée' }],
       createdAt: new Date().toISOString(),
     };
     db.missions.unshift(mission);
@@ -728,12 +870,17 @@ async function handleAPI(req, res, pathname) {
 
     if (req.method === 'PATCH') {
       const body = await readBody(req);
-      ['client', 'discord', 'domain', 'window'].forEach((f) => {
+      if (!Array.isArray(mission.activity)) mission.activity = [];
+      ['client', 'discord', 'domain', 'window', 'budget', 'startDate', 'endDate'].forEach((f) => {
         if (typeof body[f] === 'string') mission[f] = body[f].trim().slice(0, 200);
       });
       if (typeof body.scope === 'string') mission.scope = body.scope.slice(0, 4000);
       if (typeof body.notes === 'string') mission.notes = body.notes.slice(0, 20000);
-      if (body.status && MISSION_STATUS_IDS.includes(body.status)) mission.status = body.status;
+      if (body.status && MISSION_STATUS_IDS.includes(body.status) && body.status !== mission.status) {
+        const label = (MISSION_STATUSES.find((s) => s.id === body.status) || {}).label || body.status;
+        mission.activity.unshift({ at: new Date().toISOString(), text: 'Statut → ' + label });
+        mission.status = body.status;
+      }
       if (body.checklist && typeof body.checklist === 'object') {
         const clean = {};
         MISSION_CHECKLIST.forEach((_, i) => {
@@ -760,6 +907,24 @@ async function handleAPI(req, res, pathname) {
     }
   }
 
+  const reportMatch = /^\/api\/missions\/([\w-]+)\/report\.md$/.exec(pathname);
+  if (reportMatch && req.method === 'GET') {
+    const mission = db.missions.find((m) => m.id === reportMatch[1]);
+    if (!mission) return sendJSON(res, 404, { error: 'Mission introuvable.' });
+    return sendText(res, 200, buildReportMarkdown(mission), 'text/markdown; charset=utf-8', {
+      'Content-Disposition': 'attachment; filename="rapport-' + reportSlug(mission.client) + '.md"',
+    });
+  }
+
+  const exportMatch = /^\/api\/missions\/([\w-]+)\/export$/.exec(pathname);
+  if (exportMatch && req.method === 'GET') {
+    const mission = db.missions.find((m) => m.id === exportMatch[1]);
+    if (!mission) return sendJSON(res, 404, { error: 'Mission introuvable.' });
+    return sendText(res, 200, JSON.stringify(mission, null, 2), 'application/json; charset=utf-8', {
+      'Content-Disposition': 'attachment; filename="mission-' + reportSlug(mission.client) + '.json"',
+    });
+  }
+
   const aiMatch = /^\/api\/missions\/([\w-]+)\/ai$/.exec(pathname);
   if (aiMatch && req.method === 'POST') {
     const mission = db.missions.find((m) => m.id === aiMatch[1]);
@@ -776,6 +941,8 @@ async function handleAPI(req, res, pathname) {
     try {
       const analysis = await callNocturai(prompt);
       mission.aiAnalysis = { text: String(analysis).slice(0, 20000), at: new Date().toISOString() };
+      if (!Array.isArray(mission.activity)) mission.activity = [];
+      mission.activity.unshift({ at: new Date().toISOString(), text: 'Analyse IA effectuée' });
       saveStore();
       return sendJSON(res, 200, { analysis: mission.aiAnalysis.text });
     } catch (e) {
@@ -810,6 +977,8 @@ async function handleAPI(req, res, pathname) {
           added++;
         }
       });
+      if (!Array.isArray(mission.activity)) mission.activity = [];
+      mission.activity.unshift({ at: new Date().toISOString(), text: 'Scan passif — ' + added + ' faille(s) ajoutée(s)' });
       saveStore();
       return sendJSON(res, 200, { findings, tech, added, mission });
     } catch (e) {

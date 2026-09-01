@@ -1,10 +1,8 @@
 # ==================================================================
 #  Labo d'entraînement au pentest — cibles VOLONTAIREMENT vulnérables
 # ==================================================================
-#  Ces applications contiennent des failles EXPRÈS, pour s'entraîner.
 #  Elles sont liées à 127.0.0.1 uniquement : injoignables depuis
-#  l'extérieur du VPS. On y accède via le tableau de bord (authentifié)
-#  ou par un tunnel SSH. NE JAMAIS les exposer sur Internet.
+#  l'extérieur du VPS. NE JAMAIS les exposer sur Internet.
 # ==================================================================
 
 services:
@@ -15,30 +13,6 @@ services:
     ports:
       - "127.0.0.1:3001:3000"
 
-  # DVWA a besoin de deux conteneurs : l'appli PHP + sa base MariaDB.
-  dvwa:
-    image: ghcr.io/digininja/dvwa:latest
-    container_name: lab-dvwa
-    restart: unless-stopped
-    environment:
-      - DB_SERVER=dvwa-db
-    depends_on:
-      - dvwa-db
-    ports:
-      - "127.0.0.1:3002:80"
-
-  dvwa-db:
-    image: mariadb:10
-    container_name: lab-dvwa-db
-    restart: unless-stopped
-    environment:
-      - MYSQL_ROOT_PASSWORD=dvwa
-      - MYSQL_DATABASE=dvwa
-      - MYSQL_USER=dvwa
-      - MYSQL_PASSWORD=p@ssw0rd
-    volumes:
-      - dvwa-db-data:/var/lib/mysql
-
   webgoat:
     image: webgoat/webgoat:latest
     container_name: lab-webgoat
@@ -46,5 +20,10 @@ services:
     ports:
       - "127.0.0.1:3003:8080"
 
-volumes:
-  dvwa-db-data:
+  # API REST volontairement vulnérable (OWASP API Security Top 10)
+  vampi:
+    image: erev0s/vampi:latest
+    container_name: lab-vampi
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3004:5000"

@@ -254,3 +254,22 @@ textarea { resize: vertical; min-height: 90px; font-family: var(--mono); font-si
 /* ---------------- barre de progression scan ---------------- */
 .progress-bar { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; margin-top: 6px; }
 .progress-fill { height: 100%; background: var(--phosphor); border-radius: 999px; transition: width 0.25s ease; }
+
+/* ---------------- v2 : accueil, grilles, onglets défilants ---------------- */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (min-width: 640px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.stat .k { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.stat .v { font-size: 1.5rem; font-weight: 750; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.stat .s { font-size: 0.74rem; color: var(--ink-2); margin-top: 2px; }
+.timeline-lite .kv:last-child { border-bottom: 0; }
+
+/* barre d'onglets défilante quand il y en a beaucoup (mobile) */
+@media (max-width: 719px) {
+  .tabbar {
+    display: flex; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tabbar button { flex: 0 0 auto; min-width: 60px; }
+}
