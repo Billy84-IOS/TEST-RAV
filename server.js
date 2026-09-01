@@ -520,6 +520,57 @@ async function scanTarget(rawUrl) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Analyse IA (nocturai) — la clé n'est JAMAIS dans le dépôt           */
+/* ------------------------------------------------------------------ */
+
+const NOCTURAI_URL = process.env.NOCTURAI_URL || 'https://nocturai.com/api/chat';
+const NOCTURAI_KEY_FILE = path.join(DATA_DIR, 'nocturai-key.txt');
+
+function nocturaiKey() {
+  if (process.env.NOCTURAI_API_KEY) return process.env.NOCTURAI_API_KEY.trim();
+  try {
+    if (fs.existsSync(NOCTURAI_KEY_FILE)) return fs.readFileSync(NOCTURAI_KEY_FILE, 'utf8').trim();
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+}
+
+async function callNocturai(message) {
+  const key = nocturaiKey();
+  if (!key) throw new Error('Clé API nocturai absente. Ajoute-la dans data/nocturai-key.txt sur le serveur.');
+  let res;
+  try {
+    res = await fetchWithTimeout(NOCTURAI_URL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, model: 'code' }),
+    }, 45000);
+  } catch (e) {
+    throw new Error('API nocturai injoignable : ' + e.message);
+  }
+  const text = await res.text();
+  if (!res.ok) throw new Error('API nocturai a répondu ' + res.status + ' : ' + text.slice(0, 200));
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    return text; // réponse déjà en texte brut
+  }
+  // On accepte plusieurs formes de réponse courantes.
+  return (
+    data.reply ||
+    data.response ||
+    data.message ||
+    data.content ||
+    data.answer ||
+    data.text ||
+    (data.choices && data.choices[0] && (data.choices[0].message ? data.choices[0].message.content : data.choices[0].text)) ||
+    JSON.stringify(data)
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* API                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -668,6 +719,33 @@ async function handleAPI(req, res, pathname) {
       saveStore();
       return sendJSON(res, 200, { ok: true });
     }
+  }
+
+  const aiMatch = /^\/api\/missions\/([\w-]+)\/ai$/.exec(pathname);
+  if (aiMatch && req.method === 'POST') {
+    const mission = db.missions.find((m) => m.id === aiMatch[1]);
+    if (!mission) return sendJSON(res, 404, { error: 'Mission introuvable.' });
+    const findings = (mission.findings || [])
+      .map((f) => '- [' + f.severity + '] ' + f.title + (f.detail ? ' — ' + f.detail : ''))
+      .join('\n');
+    const prompt =
+      "Tu es un expert en cybersécurité. Voici les résultats d'un scan de sécurité passif du site « " +
+      (mission.domain || 'inconnu') + " ».\n\n" +
+      (findings || '(aucune faille listée pour le moment)') +
+      "\n\nEn français : 1) résume le niveau de risque global, 2) classe les problèmes du plus critique au moins grave, " +
+      "3) pour chacun donne un correctif concret et actionnable. Sois clair et concis.";
+    try {
+      const analysis = await callNocturai(prompt);
+      mission.aiAnalysis = { text: String(analysis).slice(0, 20000), at: new Date().toISOString() };
+      saveStore();
+      return sendJSON(res, 200, { analysis: mission.aiAnalysis.text });
+    } catch (e) {
+      return sendJSON(res, 502, { error: e.message });
+    }
+  }
+
+  if (pathname === '/api/ai/status' && req.method === 'GET') {
+    return sendJSON(res, 200, { configured: !!nocturaiKey() });
   }
 
   const scanMatch = /^\/api\/missions\/([\w-]+)\/scan$/.exec(pathname);

@@ -765,6 +765,26 @@ function renderMissionDetail(m) {
     scanBtn.onclick = () => runMissionScan(m);
   }
 
+  const aiBtn = document.getElementById('ms-ai');
+  if (aiBtn) {
+    aiBtn.onclick = async () => {
+      const box = document.getElementById('ms-ai-result');
+      aiBtn.disabled = true;
+      aiBtn.textContent = '🤖 Analyse en cours…';
+      box.classList.remove('hidden');
+      box.innerHTML = '<div class="card" style="padding:12px"><span class="muted small">L\'IA analyse les résultats…</span></div>';
+      try {
+        const { analysis } = await api('/api/missions/' + m.id + '/ai', { method: 'POST' });
+        box.innerHTML = '<div class="card" style="padding:14px"><div class="row" style="gap:8px;margin-bottom:8px"><span class="badge badge-info">🤖 Analyse IA</span></div><div class="small" style="white-space:pre-wrap;line-height:1.55">' + esc(analysis) + '</div></div>';
+      } catch (e) {
+        box.innerHTML = '<div class="legal" style="margin:0">⚠️<div>' + esc(e.message) + '</div></div>';
+      } finally {
+        aiBtn.disabled = false;
+        aiBtn.textContent = '🤖 Analyse IA des résultats';
+      }
+    };
+  }
+
   // Coche/décoche : sauvegarde immédiate.
   view.querySelectorAll('[data-check]').forEach((cb) => {
     cb.onchange = async () => {
@@ -928,6 +948,9 @@ function renderReconSection(m, allChecked) {
        <div class="progress-bar"><div class="progress-fill" id="ms-scan-fill" style="width:0%"></div></div>
      </div>
      <div id="ms-scan-result" class="hidden" style="margin-top:12px"></div>
+
+     <button class="btn btn-block" id="ms-ai" style="margin-top:10px">🤖 Analyse IA des résultats</button>
+     <div id="ms-ai-result" class="hidden" style="margin-top:10px"></div>
 
      <div class="lbl" style="margin:18px 0 6px">Tests actifs — à copier, uniquement depuis une machine autorisée</div>
      <div class="legal" style="margin:0 0 8px;padding:8px 10px;font-size:0.78rem">⚠️<div>nmap / nuclei / ffuf frappent le serveur. Ne les lance PAS depuis ton VPS (coupure possible). Copie et exécute depuis une machine autorisée.</div></div>
