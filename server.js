@@ -568,7 +568,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/')) return await handleAPI(req, res, pathname);
 
     if (pathname === '/' || pathname === '/index.html') return serveFile(res, 'index.html', 'no-cache');
-    if (path.extname(pathname)) return serveFile(res, pathname.slice(1), 'public, max-age=300');
+    if (path.extname(pathname)) return serveFile(res, pathname.slice(1), 'no-cache');
     return serveFile(res, 'index.html', 'no-cache');
   } catch (err) {
     console.error('[hacklab] erreur :', err.message);
