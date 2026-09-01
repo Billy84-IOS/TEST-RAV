@@ -539,18 +539,36 @@ function nocturaiKey() {
 async function callNocturai(message) {
   const key = nocturaiKey();
   if (!key) throw new Error('Clé API nocturai absente. Ajoute-la dans data/nocturai-key.txt sur le serveur.');
-  let res;
-  try {
-    res = await fetchWithTimeout(NOCTURAI_URL, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: message }], model: 'code' }),
-    }, 45000);
-  } catch (e) {
-    throw new Error('API nocturai injoignable : ' + e.message);
+
+  // La doc et le serveur ne s'accordent pas sur le format : on essaie les
+  // formes les plus courantes jusqu'à ce que l'une soit acceptée.
+  const candidates = [
+    { messages: [message], model: 'code' },
+    { messages: [{ role: 'user', content: message }], model: 'code' },
+    { message, model: 'code' },
+    { messages: [{ role: 'user', content: message }] },
+  ];
+
+  let res = null;
+  let lastText = '';
+  for (const body of candidates) {
+    try {
+      res = await fetchWithTimeout(NOCTURAI_URL, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, 45000);
+    } catch (e) {
+      throw new Error('API nocturai injoignable : ' + e.message);
+    }
+    lastText = await res.text();
+    if (res.ok) break;
+    if (res.status !== 400) throw new Error('API nocturai a répondu ' + res.status + ' : ' + lastText.slice(0, 200));
+    res = null; // 400 : on tente la forme suivante
   }
-  const text = await res.text();
-  if (!res.ok) throw new Error('API nocturai a répondu ' + res.status + ' : ' + text.slice(0, 200));
+  if (!res) throw new Error('API nocturai a refusé toutes les formes de requête. Dernier message : ' + lastText.slice(0, 200));
+
+  const text = lastText;
   let data;
   try {
     data = JSON.parse(text);
