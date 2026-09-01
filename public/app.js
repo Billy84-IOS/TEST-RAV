@@ -775,7 +775,23 @@ function renderMissionDetail(m) {
       box.innerHTML = '<div class="card" style="padding:12px"><span class="muted small">L\'IA analyse les résultats…</span></div>';
       try {
         const { analysis } = await api('/api/missions/' + m.id + '/ai', { method: 'POST' });
-        box.innerHTML = '<div class="card" style="padding:14px"><div class="row" style="gap:8px;margin-bottom:8px"><span class="badge badge-info">🤖 Analyse IA</span></div><div class="small" style="white-space:pre-wrap;line-height:1.55">' + esc(analysis) + '</div></div>';
+        const cmds = extractCommands(analysis);
+        const cmdBlock = cmds.length
+          ? '<div class="lbl" style="margin:12px 0 6px">Commandes proposées — un tap les envoie dans ton Terminal (tu les lances toi-même)</div>' +
+            cmds
+              .map(
+                (c) =>
+                  '<div class="cmd" style="margin-top:6px"><code class="mono">' + esc(c) + '</code>' +
+                  '<button class="btn btn-sm copy" data-ai-cmd="' + esc(c) + '">▶ Terminal</button></div>'
+              )
+              .join('')
+          : '';
+        box.innerHTML =
+          '<div class="card" style="padding:14px"><div class="row" style="gap:8px;margin-bottom:8px"><span class="badge badge-info">🤖 Analyse IA</span></div>' +
+          '<div class="small" style="white-space:pre-wrap;line-height:1.55">' + esc(analysis) + '</div>' + cmdBlock + '</div>';
+        box.querySelectorAll('[data-ai-cmd]').forEach((b) => {
+          b.onclick = () => goTerminalWith(b.dataset.aiCmd);
+        });
       } catch (e) {
         box.innerHTML = '<div class="legal" style="margin:0">⚠️<div>' + esc(e.message) + '</div></div>';
       } finally {
@@ -852,6 +868,35 @@ function renderMissionDetail(m) {
     toast('Mission supprimée');
     renderMissions();
   };
+}
+
+function extractCommands(text) {
+  const cmds = [];
+  const seen = new Set();
+  const tools = 'sudo|nmap|sqlmap|ffuf|gobuster|nuclei|whatweb|nikto|hydra|curl|wget|dig|whois|openssl|dirb|wpscan|feroxbuster|amass|subfinder|httpx|nc|ncat';
+  const re = new RegExp('^\\s*\\$?\\s*((?:' + tools + ')\\b.*)$');
+  const push = (c) => {
+    c = c.replace(/^\s*\$\s*/, '').trim();
+    if (c && c.length < 400 && !seen.has(c)) {
+      seen.add(c);
+      cmds.push(c);
+    }
+  };
+  // Blocs de code ``` … ```
+  const fence = /```(?:[a-z]*)\n?([\s\S]*?)```/g;
+  let m;
+  while ((m = fence.exec(text))) {
+    m[1].split(/\r?\n/).forEach((l) => {
+      const mm = re.exec(l);
+      if (mm) push(mm[1]);
+    });
+  }
+  // Lignes isolées
+  text.split(/\r?\n/).forEach((l) => {
+    const mm = re.exec(l);
+    if (mm) push(mm[1]);
+  });
+  return cmds.slice(0, 15);
 }
 
 async function runMissionScan(m) {
