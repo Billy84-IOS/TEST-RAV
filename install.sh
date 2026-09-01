@@ -118,6 +118,7 @@ fi
 TTYD_CRED="$(cat "$TTYD_CRED_FILE")"
 
 if command -v ttyd >/dev/null 2>&1; then
+  TTYD_BIN="$(command -v ttyd)"
   cat > /etc/systemd/system/hacklab-ttyd.service <<UNIT
 [Unit]
 Description=HACKLAB terminal web (ttyd)
@@ -125,8 +126,9 @@ After=network.target
 
 [Service]
 Type=simple
-# Lié à 127.0.0.1 : accessible seulement via le tableau de bord (proxy authentifié).
-ExecStart=/usr/bin/ttyd -p ${TTYD_PORT} -i 127.0.0.1 -c ${TTYD_CRED} -W bash
+# Lié à 127.0.0.1 + base-path /terminal : accessible seulement via le tableau
+# de bord (proxy authentifié). C'est le dashboard qui gère l'authentification.
+ExecStart=${TTYD_BIN} -p ${TTYD_PORT} -i 127.0.0.1 -b /terminal -W bash
 Restart=always
 User=${RUN_USER}
 

@@ -275,21 +275,25 @@ async function dockerAction(action, container) {
 /* ------------------------------------------------------------------ */
 
 function resolveUpstream(pathname) {
-  // /terminal/...  → ttyd
+  // /terminal/...  → ttyd (lancé avec -b /terminal : on transmet le chemin complet)
   if (pathname === '/terminal' || pathname.startsWith('/terminal/')) {
-    return { port: TTYD_PORT, base: '/terminal', kind: 'terminal' };
+    return { port: TTYD_PORT, base: '/terminal', kind: 'terminal', stripBase: false };
   }
-  // /target/<id>/... → cible du labo
+  // /target/<id>/... → cible du labo (on retire le préfixe pour l'appli en dessous)
   const m = /^\/target\/([a-z0-9]+)(\/.*)?$/.exec(pathname);
   if (m) {
     const target = TARGET_BY_ID.get(m[1]);
-    if (target) return { port: target.port, base: '/target/' + target.id, kind: 'target' };
+    if (target) return { port: target.port, base: '/target/' + target.id, kind: 'target', stripBase: true };
   }
   return null;
 }
 
+function upstreamPath(req, upstream) {
+  return upstream.stripBase ? req.url.slice(upstream.base.length) || '/' : req.url;
+}
+
 function proxyHTTP(req, res, upstream) {
-  const subPath = req.url.slice(upstream.base.length) || '/';
+  const subPath = upstreamPath(req, upstream);
   const options = {
     host: '127.0.0.1',
     port: upstream.port,
@@ -315,7 +319,7 @@ function proxyHTTP(req, res, upstream) {
 }
 
 function proxyUpgrade(req, socket, head, upstream) {
-  const subPath = req.url.slice(upstream.base.length) || '/';
+  const subPath = upstreamPath(req, upstream);
   const upstreamSocket = net.connect(upstream.port, '127.0.0.1', () => {
     const headers = { ...req.headers, host: '127.0.0.1:' + upstream.port };
     let raw = req.method + ' ' + subPath + ' HTTP/1.1\r\n';
