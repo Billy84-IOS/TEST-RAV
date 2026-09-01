@@ -160,6 +160,14 @@ async function renderLabo() {
 /* ------------------------------ onglet : terminal ------------------------------ */
 
 let termState = {};
+let pendingTerminalCmd = null;
+
+function goTerminalWith(cmd) {
+  pendingTerminalCmd = cmd;
+  document.querySelectorAll('#tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'terminal'));
+  currentTab = 'terminal';
+  renderTab();
+}
 
 function teardownTerm() {
   if (termState.onResize) window.removeEventListener('resize', termState.onResize);
@@ -275,6 +283,11 @@ function initTerm() {
 
   // Barre de commande (le champ où le coller iOS fonctionne).
   const input = document.getElementById('cmdInput');
+  if (pendingTerminalCmd) {
+    input.value = pendingTerminalCmd;
+    pendingTerminalCmd = null;
+    setTimeout(() => input.focus(), 100);
+  }
   const runFromInput = () => {
     const value = input.value;
     if (!value) {
@@ -710,6 +723,8 @@ function renderMissionDetail(m) {
        <div style="margin-top:8px">${checklistHtml}</div>
      </div>
 
+     ${renderReconSection(m, allChecked)}
+
      <div class="card" style="margin-bottom:12px">
        <h2>Failles trouvées</h2>
        <div style="margin-top:10px">${findingsHtml || '<p class="tiny muted">Aucune faille notée.</p>'}</div>
@@ -733,6 +748,10 @@ function renderMissionDetail(m) {
     openMissionId = null;
     renderMissions();
   };
+
+  view.querySelectorAll('[data-recon]').forEach((b) => {
+    b.onclick = () => goTerminalWith(b.dataset.recon);
+  });
 
   // Coche/décoche : sauvegarde immédiate.
   view.querySelectorAll('[data-check]').forEach((cb) => {
@@ -800,6 +819,69 @@ function renderMissionDetail(m) {
     openMissionId = null;
     toast('Mission supprimée');
     renderMissions();
+  };
+}
+
+function renderReconSection(m, allChecked) {
+  const recon = reconCommands(m);
+  if (!allChecked) {
+    return `<div class="card" style="margin-bottom:12px">
+       <h2>Reconnaissance</h2>
+       <p class="small muted" style="margin-top:8px">🔒 Les boutons de test apparaîtront quand toute la checklist ci-dessus sera cochée (autorisation confirmée).</p>
+     </div>`;
+  }
+  if (!recon) {
+    return `<div class="card" style="margin-bottom:12px">
+       <h2>Reconnaissance</h2>
+       <p class="small muted" style="margin-top:8px">Renseigne le domaine de la cible plus haut pour activer les boutons.</p>
+     </div>`;
+  }
+  const btns = (arr) =>
+    arr.map((c) => `<button class="btn btn-sm" data-recon="${esc(c.cmd)}">${esc(c.label)}</button>`).join('');
+  return `<div class="card" style="margin-bottom:12px">
+     <h2>Reconnaissance</h2>
+     <p class="tiny muted" style="margin:6px 0 10px">Un bouton prépare la commande dans le Terminal (avec le domaine déjà rempli). Tu vérifies, puis tu tapes Envoyer.</p>
+     <div class="lbl" style="margin-bottom:6px">Passif (sans risque)</div>
+     <div class="btn-row">${btns(recon.passives)}</div>
+     <div class="lbl" style="margin:14px 0 6px">Actif — nécessite l'autorisation écrite + une machine autorisée</div>
+     <div class="legal" style="margin:0 0 8px;padding:8px 10px;font-size:0.78rem">⚠️<div>Ne lance ces scans QUE depuis une machine autorisée. Depuis ton VPS, ton hébergeur peut te couper.</div></div>
+     <div class="btn-row">${btns(recon.actives)}</div>
+   </div>`;
+}
+
+function missionURL(m) {
+  let d = (m.domain || '').trim();
+  if (!d) return null;
+  if (!/^https?:\/\//i.test(d)) d = 'https://' + d;
+  return d;
+}
+function missionHost(m) {
+  const u = missionURL(m);
+  if (!u) return null;
+  try {
+    return new URL(u).host;
+  } catch (e) {
+    return (m.domain || '').replace(/^https?:\/\//i, '').split('/')[0];
+  }
+}
+
+function reconCommands(m) {
+  const url = missionURL(m);
+  const host = missionHost(m);
+  if (!url || !host) return null;
+  return {
+    passives: [
+      { label: 'En-têtes HTTP', cmd: 'curl -sSI ' + url },
+      { label: 'Technologies', cmd: 'whatweb ' + url },
+      { label: 'DNS', cmd: 'dig ' + host + ' +short; dig MX ' + host + ' +short' },
+      { label: 'WHOIS', cmd: 'whois ' + host },
+      { label: 'Certificat TLS', cmd: 'echo | openssl s_client -connect ' + host + ':443 -servername ' + host + ' 2>/dev/null | openssl x509 -noout -subject -issuer -dates' },
+    ],
+    actives: [
+      { label: 'Ports & services (nmap)', cmd: 'nmap -sV ' + host },
+      { label: 'Vulns connues (nuclei)', cmd: 'nuclei -u ' + url },
+      { label: 'Répertoires (ffuf)', cmd: 'ffuf -u ' + url + '/FUZZ -w /usr/share/seclists/Discovery/Web-Content/common.txt' },
+    ],
   };
 }
 
