@@ -15,12 +15,29 @@ services:
     ports:
       - "127.0.0.1:3001:3000"
 
+  # DVWA a besoin de deux conteneurs : l'appli PHP + sa base MariaDB.
   dvwa:
     image: ghcr.io/digininja/dvwa:latest
     container_name: lab-dvwa
     restart: unless-stopped
+    environment:
+      - DB_SERVER=dvwa-db
+    depends_on:
+      - dvwa-db
     ports:
       - "127.0.0.1:3002:80"
+
+  dvwa-db:
+    image: mariadb:10
+    container_name: lab-dvwa-db
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+    volumes:
+      - dvwa-db-data:/var/lib/mysql
 
   webgoat:
     image: webgoat/webgoat:latest
@@ -28,3 +45,6 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3003:8080"
+
+volumes:
+  dvwa-db-data:
