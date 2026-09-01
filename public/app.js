@@ -493,6 +493,351 @@ function renderReglages() {
   });
 }
 
+/* ------------------------------ onglet : missions ------------------------------ */
+
+let missionsData = null;
+let openMissionId = null;
+
+const MISSION_LEGAL = `<div class="legal" style="background:var(--danger-bg);border-color:var(--danger);color:var(--danger)">🛑<div><b>Avant toute mission, coche toute la checklist.</b> Un « ok » sur Discord n'est PAS une autorisation. Il te faut l'accord écrit du vrai propriétaire, l'accord de l'hébergeur, et une machine autorisée à tester (ton VPS interdit probablement d'attaquer vers l'extérieur — il te couperait). Sans ça, c'est un délit.</div></div>`;
+
+function severityMeta(id) {
+  return (missionsData.severities || []).find((s) => s.id === id) || { label: id, tone: 'off' };
+}
+function missionStatusMeta(id) {
+  return (missionsData.statuses || []).find((s) => s.id === id) || { label: id, tone: 'off' };
+}
+
+function genAuthorization(m) {
+  return (
+    "AUTORISATION DE TEST D'INTRUSION\n" +
+    '================================\n\n' +
+    "Je soussigné(e) ____________________________ (nom et prénom),\n" +
+    "agissant en qualité de propriétaire ou représentant légal du site :\n\n" +
+    '    ' + (m.domain || '____________________') + '\n\n' +
+    "autorise [TON NOM / TON ENTREPRISE] à réaliser un test de sécurité\n" +
+    "(test d'intrusion) sur le périmètre défini ci-dessous.\n\n" +
+    'PÉRIMÈTRE AUTORISÉ :\n' +
+    (m.scope ? m.scope : '    (à préciser : domaines / URL autorisés, et ce qui est HORS-scope)') + '\n\n' +
+    'FENÊTRE DE TEST CONVENUE : ' + (m.window || '____________________') + '\n\n' +
+    'CONDITIONS :\n' +
+    '- Les tests se limitent strictement au périmètre ci-dessus.\n' +
+    '- Aucun test destructif ni déni de service (DoS).\n' +
+    "- Aucune donnée personnelle de client n'est copiée, conservée ou divulguée.\n" +
+    '- Un rapport confidentiel est remis ; les failles ne sont divulguées à personne d’autre.\n' +
+    "- Le propriétaire confirme disposer des droits nécessaires (y compris l'accord\n" +
+    "  de l'hébergeur si requis) et avoir effectué une sauvegarde du site.\n" +
+    '- Cette autorisation peut être révoquée à tout moment par écrit.\n\n' +
+    'Fait à ____________________, le ____________________\n\n' +
+    'Le propriétaire (nom + signature) :        Le prestataire (nom + signature) :\n\n' +
+    '____________________________              ____________________________'
+  );
+}
+
+function genReport(m) {
+  const today = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  const bySev = {};
+  (m.findings || []).forEach((f) => (bySev[f.severity] = (bySev[f.severity] || 0) + 1));
+  const breakdown =
+    Object.keys(bySev).length
+      ? Object.entries(bySev).map(([s, n]) => n + ' ' + severityMeta(s).label.toLowerCase()).join(', ')
+      : 'aucune';
+
+  let out =
+    'RAPPORT DE TEST D’INTRUSION — CONFIDENTIEL\n' +
+    '==========================================\n\n' +
+    'Client        : ' + (m.client || '') + '\n' +
+    'Cible         : ' + (m.domain || '') + '\n' +
+    'Période       : ' + (m.window || '') + '\n' +
+    'Date du rapport : ' + today + '\n\n' +
+    '1. RÉSUMÉ\n---------\n' +
+    (m.findings || []).length + ' faille(s) identifiée(s) : ' + breakdown + '.\n\n' +
+    '2. PÉRIMÈTRE\n------------\n' + (m.scope || '(non précisé)') + '\n\n' +
+    '3. FAILLES IDENTIFIÉES\n----------------------\n';
+
+  if (!(m.findings || []).length) {
+    out += 'Aucune faille identifiée dans le périmètre testé.\n';
+  } else {
+    m.findings.forEach((f, i) => {
+      out +=
+        '\n[' + severityMeta(f.severity).label.toUpperCase() + '] ' + (i + 1) + '. ' + (f.title || 'Sans titre') + '\n' +
+        'Description : ' + (f.detail || '(à compléter)') + '\n';
+    });
+  }
+  out +=
+    '\n4. RECOMMANDATIONS\n------------------\n' +
+    '- Corriger en priorité les failles critiques et élevées.\n' +
+    '- Mettre à jour les composants (CMS, extensions, dépendances).\n' +
+    '- Vérifier la validation des entrées et la gestion des sessions.\n\n' +
+    '5. CONCLUSION\n-------------\n' +
+    'Rapport remis à titre confidentiel. Un nouveau test est conseillé après correction.\n';
+  return out;
+}
+
+async function renderMissions() {
+  view.innerHTML = MISSION_LEGAL + '<div class="empty">Chargement…</div>';
+  missionsData = await api('/api/missions');
+
+  if (openMissionId) {
+    const m = missionsData.missions.find((x) => x.id === openMissionId);
+    if (m) return renderMissionDetail(m);
+    openMissionId = null;
+  }
+
+  const list = missionsData.missions
+    .map((m) => {
+      const done = Object.keys(m.checklist || {}).length;
+      const total = missionsData.checklist.length;
+      const meta = missionStatusMeta(m.status);
+      return `
+      <button class="list-item" data-mission="${esc(m.id)}">
+        <div class="grow">
+          <div class="t">${esc(m.client)}</div>
+          <div class="m">${esc(m.domain || 'domaine à définir')}</div>
+          <div style="margin-top:6px" class="btn-row">
+            <span class="badge badge-${meta.tone}">${esc(meta.label)}</span>
+            <span class="badge">checklist ${done}/${total}</span>
+            ${(m.findings || []).length ? `<span class="badge">${m.findings.length} faille(s)</span>` : ''}
+          </div>
+        </div>
+        <div class="r tiny muted">ouvrir ›</div>
+      </button>`;
+    })
+    .join('');
+
+  view.innerHTML =
+    MISSION_LEGAL +
+    `<div class="section-title"><h1>Missions</h1></div>
+     <div class="card" style="margin-bottom:14px">
+       <h2>Nouvelle mission</h2>
+       <div class="field" style="margin-top:12px"><label for="ms-client">Client (nom / boutique)</label><input id="ms-client" type="text" placeholder="Ex. Boutique FiveM de Kévin"></div>
+       <div class="field"><label for="ms-discord">Contact Discord</label><input id="ms-discord" type="text" placeholder="pseudo#0000"></div>
+       <div class="field"><label for="ms-domain">Domaine / URL du site</label><input id="ms-domain" type="text" placeholder="https://exemple.tld"></div>
+       <button class="btn btn-primary btn-block" id="ms-create">Créer la mission</button>
+     </div>
+     ${missionsData.missions.length ? `<div class="list">${list}</div>` : `<div class="empty"><div class="ic">📋</div>Aucune mission. Crée-en une quand tu as un client sérieux.</div>`}`;
+
+  document.getElementById('ms-create').onclick = async () => {
+    const client = document.getElementById('ms-client').value.trim();
+    if (!client) return toast('Nom du client obligatoire');
+    try {
+      const { mission } = await api('/api/missions', {
+        method: 'POST',
+        body: JSON.stringify({
+          client,
+          discord: document.getElementById('ms-discord').value,
+          domain: document.getElementById('ms-domain').value,
+        }),
+      });
+      openMissionId = mission.id;
+      renderMissions();
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+
+  view.querySelectorAll('[data-mission]').forEach((b) => {
+    b.onclick = () => {
+      openMissionId = b.dataset.mission;
+      renderMissions();
+    };
+  });
+}
+
+function renderMissionDetail(m) {
+  const total = missionsData.checklist.length;
+  const done = Object.keys(m.checklist || {}).length;
+  const allChecked = done === total;
+
+  const checklistHtml = missionsData.checklist
+    .map(
+      (item, i) => `
+      <label class="check ${m.checklist[i] ? 'done' : ''}">
+        <input type="checkbox" data-check="${i}" ${m.checklist[i] ? 'checked' : ''}>
+        <span>${esc(item)}</span>
+      </label>`
+    )
+    .join('');
+
+  const statusOptions = missionsData.statuses
+    .map((s) => `<option value="${esc(s.id)}" ${s.id === m.status ? 'selected' : ''}>${esc(s.label)}</option>`)
+    .join('');
+
+  const findingsHtml = (m.findings || [])
+    .map(
+      (f, i) => `
+      <div class="card" style="padding:12px;margin-bottom:8px">
+        <div class="spread"><span class="badge badge-${severityMeta(f.severity).tone}">${esc(severityMeta(f.severity).label)}</span>
+          <button class="btn btn-sm btn-danger" data-del-finding="${i}">Retirer</button></div>
+        <div style="font-weight:650;margin-top:8px">${esc(f.title || 'Sans titre')}</div>
+        <div class="small muted" style="margin-top:4px;white-space:pre-wrap">${esc(f.detail || '')}</div>
+      </div>`
+    )
+    .join('');
+
+  const sevOptions = missionsData.severities.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+
+  view.innerHTML =
+    `<button class="btn btn-sm" id="ms-back" style="margin:14px 0">← Toutes les missions</button>
+     ${
+       allChecked
+         ? `<div class="legal" style="background:var(--ok-bg);border-color:var(--ok);color:var(--ok)">✅<div><b>Checklist complète.</b> Tu as le cadre pour tester ce périmètre. Reste dedans, documente tout.</div></div>`
+         : MISSION_LEGAL
+     }
+
+     <div class="card" style="margin-bottom:12px">
+       <div class="field"><label>Client</label><input id="ms-d-client" type="text" value="${esc(m.client)}"></div>
+       <div class="field"><label>Contact Discord</label><input id="ms-d-discord" type="text" value="${esc(m.discord || '')}"></div>
+       <div class="field"><label>Domaine / URL</label><input id="ms-d-domain" type="text" value="${esc(m.domain || '')}"></div>
+       <div class="field"><label>Fenêtre de test</label><input id="ms-d-window" type="text" value="${esc(m.window || '')}" placeholder="Ex. samedi 20h–23h"></div>
+       <div class="field"><label>Statut</label><select id="ms-d-status">${statusOptions}</select></div>
+     </div>
+
+     <div class="card" style="margin-bottom:12px">
+       <h2>Périmètre</h2>
+       <p class="tiny muted" style="margin:6px 0 8px">Ce que tu as le droit de tester, ET ce qui est hors-scope. Sois précis.</p>
+       <textarea id="ms-d-scope" placeholder="Autorisé : https://exemple.tld (site vitrine + boutique)&#10;Hors-scope : serveur de jeu, base de données, sous-domaines, e-mails">${esc(m.scope || '')}</textarea>
+     </div>
+
+     <div class="card" style="margin-bottom:12px">
+       <h2>Autorisation à faire signer</h2>
+       <p class="tiny muted" style="margin:6px 0 8px">Envoie ce document au propriétaire. Tant qu'il n'est pas signé, tu ne testes rien.</p>
+       <textarea id="ms-auth" readonly style="min-height:200px">${esc(genAuthorization(m))}</textarea>
+       <button class="btn btn-sm btn-block" id="ms-copy-auth" style="margin-top:8px">📋 Copier l'autorisation</button>
+     </div>
+
+     <div class="card" style="margin-bottom:12px">
+       <div class="spread"><h2>Checklist avant tests</h2><span class="mono small muted">${done}/${total}</span></div>
+       <div style="margin-top:8px">${checklistHtml}</div>
+     </div>
+
+     <div class="card" style="margin-bottom:12px">
+       <h2>Failles trouvées</h2>
+       <div style="margin-top:10px">${findingsHtml || '<p class="tiny muted">Aucune faille notée.</p>'}</div>
+       <div class="field" style="margin-top:12px"><label>Titre de la faille</label><input id="ms-f-title" type="text" placeholder="Ex. Injection SQL sur /produit?id="></div>
+       <div class="field"><label>Gravité</label><select id="ms-f-sev">${sevOptions}</select></div>
+       <div class="field"><label>Description</label><textarea id="ms-f-detail" placeholder="Où, comment reproduire, impact…"></textarea></div>
+       <button class="btn btn-sm btn-block" id="ms-add-finding">+ Ajouter la faille</button>
+     </div>
+
+     <div class="card" style="margin-bottom:12px">
+       <h2>Rapport</h2>
+       <button class="btn btn-block" id="ms-gen-report" style="margin-top:10px">Générer le rapport</button>
+       <textarea id="ms-report" readonly class="hidden" style="min-height:220px;margin-top:10px"></textarea>
+       <button class="btn btn-sm btn-block hidden" id="ms-copy-report" style="margin-top:8px">📋 Copier le rapport</button>
+     </div>
+
+     <button class="btn btn-primary btn-block" id="ms-save">Enregistrer la mission</button>
+     <button class="btn btn-danger btn-block" id="ms-delete" style="margin-top:10px">Supprimer la mission</button>`;
+
+  document.getElementById('ms-back').onclick = () => {
+    openMissionId = null;
+    renderMissions();
+  };
+
+  // Coche/décoche : sauvegarde immédiate.
+  view.querySelectorAll('[data-check]').forEach((cb) => {
+    cb.onchange = async () => {
+      const i = Number(cb.dataset.check);
+      if (cb.checked) m.checklist[i] = true;
+      else delete m.checklist[i];
+      await saveMission(m, false);
+      renderMissions();
+    };
+  });
+
+  view.querySelectorAll('[data-del-finding]').forEach((b) => {
+    b.onclick = async () => {
+      m.findings.splice(Number(b.dataset.delFinding), 1);
+      await saveMission(m, false);
+      renderMissions();
+    };
+  });
+
+  document.getElementById('ms-add-finding').onclick = async () => {
+    const title = document.getElementById('ms-f-title').value.trim();
+    if (!title) return toast('Titre de la faille obligatoire');
+    m.findings = m.findings || [];
+    m.findings.push({
+      title,
+      severity: document.getElementById('ms-f-sev').value,
+      detail: document.getElementById('ms-f-detail').value,
+    });
+    collectMissionFields(m);
+    await saveMission(m, false);
+    renderMissions();
+  };
+
+  document.getElementById('ms-copy-auth').onclick = () => {
+    navigator.clipboard.writeText(genAuthorization(collectMissionFields(m))).then(
+      () => toast('Autorisation copiée'),
+      () => toast('Copie impossible')
+    );
+  };
+
+  document.getElementById('ms-gen-report').onclick = () => {
+    const report = genReport(collectMissionFields(m));
+    const ta = document.getElementById('ms-report');
+    ta.value = report;
+    ta.classList.remove('hidden');
+    document.getElementById('ms-copy-report').classList.remove('hidden');
+  };
+  document.getElementById('ms-copy-report').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('ms-report').value).then(
+      () => toast('Rapport copié'),
+      () => toast('Copie impossible')
+    );
+  };
+
+  document.getElementById('ms-save').onclick = async () => {
+    collectMissionFields(m);
+    await saveMission(m, true);
+    renderMissions();
+  };
+
+  document.getElementById('ms-delete').onclick = async () => {
+    if (!confirm('Supprimer la mission « ' + m.client + ' » ?')) return;
+    await api('/api/missions/' + m.id, { method: 'DELETE' });
+    openMissionId = null;
+    toast('Mission supprimée');
+    renderMissions();
+  };
+}
+
+function collectMissionFields(m) {
+  const g = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.value : undefined;
+  };
+  if (g('ms-d-client') !== undefined) m.client = g('ms-d-client').trim() || m.client;
+  if (g('ms-d-discord') !== undefined) m.discord = g('ms-d-discord');
+  if (g('ms-d-domain') !== undefined) m.domain = g('ms-d-domain');
+  if (g('ms-d-window') !== undefined) m.window = g('ms-d-window');
+  if (g('ms-d-scope') !== undefined) m.scope = g('ms-d-scope');
+  if (g('ms-d-status') !== undefined) m.status = g('ms-d-status');
+  return m;
+}
+
+async function saveMission(m, notify) {
+  try {
+    await api('/api/missions/' + m.id, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        client: m.client,
+        discord: m.discord,
+        domain: m.domain,
+        window: m.window,
+        scope: m.scope,
+        status: m.status,
+        checklist: m.checklist,
+        findings: m.findings,
+      }),
+    });
+    if (notify) toast('Mission enregistrée');
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
 /* ------------------------------ routeur ------------------------------ */
 
 async function renderTab() {
@@ -502,6 +847,7 @@ async function renderTab() {
     else if (currentTab === 'terminal') renderTerminal();
     else if (currentTab === 'parcours') await renderParcours();
     else if (currentTab === 'outils') await renderOutils();
+    else if (currentTab === 'missions') await renderMissions();
     else if (currentTab === 'reglages') renderReglages();
   } catch (e) {
     view.innerHTML = `<div class="empty"><div class="ic">⚠️</div>${esc(e.message)}</div>`;

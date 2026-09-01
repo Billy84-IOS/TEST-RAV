@@ -272,3 +272,36 @@ const TOOLS = [
 ];
 
 module.exports = { TARGETS, ROADMAP, TOOLS };
+
+// --- Missions (prestations autorisées pour de vrais clients) ---
+const MISSION_CHECKLIST = [
+  "Le contact est bien le PROPRIÉTAIRE du site (identité vérifiée, pas juste un pseudo Discord)",
+  "Autorisation écrite et signée reçue, avec périmètre et dates précises",
+  "L'hébergeur du site autorise les tests (beaucoup l'interdisent, même avec l'accord du propriétaire)",
+  "Périmètre clair : domaines/URL autorisés ET liste de ce qui est hors-scope",
+  "Fenêtre de test convenue (jour/heure) + contact d'urgence noté",
+  "Sauvegarde du site faite par le propriétaire avant les tests",
+  "Tu testes depuis une machine/adresse autorisée, PAS depuis un VPS qui l'interdit",
+  "Aucun test destructif ni déni de service ; données clients jamais exfiltrées",
+];
+
+const SEVERITIES = [
+  { id: 'critique', label: 'Critique', tone: 'bad' },
+  { id: 'elevee', label: 'Élevée', tone: 'bad' },
+  { id: 'moyenne', label: 'Moyenne', tone: 'warn' },
+  { id: 'faible', label: 'Faible', tone: 'info' },
+  { id: 'info', label: 'Info', tone: 'off' },
+];
+
+const MISSION_STATUSES = [
+  { id: 'brouillon', label: 'Brouillon', tone: 'off' },
+  { id: 'attente_autorisation', label: 'En attente d\'autorisation', tone: 'warn' },
+  { id: 'autorisee', label: 'Autorisée', tone: 'info' },
+  { id: 'en_cours', label: 'Tests en cours', tone: 'warn' },
+  { id: 'rapport', label: 'Rapport rendu', tone: 'ok' },
+  { id: 'cloturee', label: 'Clôturée', tone: 'ok' },
+];
+
+module.exports.MISSION_CHECKLIST = MISSION_CHECKLIST;
+module.exports.SEVERITIES = SEVERITIES;
+module.exports.MISSION_STATUSES = MISSION_STATUSES;

@@ -115,7 +115,7 @@ p { margin: 0; }
 main { padding-bottom: 80px; padding-top: 6px; }
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   background: var(--bg-2); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -129,7 +129,7 @@ main { padding-bottom: 80px; padding-top: 6px; }
 @media (min-width: 720px) {
   .tabbar {
     position: sticky; top: 57px; bottom: auto; max-width: 900px; margin: 12px auto 0;
-    grid-template-columns: repeat(5, auto); justify-content: start; gap: 4px;
+    grid-template-columns: repeat(6, auto); justify-content: start; gap: 4px;
     border: 1px solid var(--line); border-radius: 999px; padding: 5px;
   }
   .tabbar button { flex-direction: row; gap: 7px; font-size: 0.85rem; padding: 8px 15px; border-radius: 999px; }

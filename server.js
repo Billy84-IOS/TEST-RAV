@@ -20,7 +20,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 
-const { TARGETS, ROADMAP, TOOLS } = require('./lab-data');
+const { TARGETS, ROADMAP, TOOLS, MISSION_CHECKLIST, SEVERITIES, MISSION_STATUSES } = require('./lab-data');
+const MISSION_STATUS_IDS = MISSION_STATUSES.map((s) => s.id);
+const SEVERITY_IDS = SEVERITIES.map((s) => s.id);
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -63,6 +65,7 @@ function loadStore() {
   if (fs.existsSync(STORE_FILE)) {
     try {
       db = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+      if (!Array.isArray(db.missions)) db.missions = []; // migration
     } catch (err) {
       fs.renameSync(STORE_FILE, STORE_FILE + '.corrompu-' + Date.now());
       db = null;
@@ -76,6 +79,7 @@ function loadStore() {
       passwordIsGenerated: !process.env.DASHBOARD_PASSWORD,
       progress: {}, // { moduleId: { itemIndex: true } }
       notes: {}, // { key: "texte" }
+      missions: [],
       createdAt: new Date().toISOString(),
     };
     saveStore();
@@ -449,6 +453,75 @@ async function handleAPI(req, res, pathname) {
 
   if (pathname === '/api/tools' && req.method === 'GET') {
     return sendJSON(res, 200, { tools: TOOLS });
+  }
+
+  /* --- missions (prestations autorisées) --- */
+  if (pathname === '/api/missions' && req.method === 'GET') {
+    return sendJSON(res, 200, {
+      missions: db.missions,
+      checklist: MISSION_CHECKLIST,
+      severities: SEVERITIES,
+      statuses: MISSION_STATUSES,
+    });
+  }
+
+  if (pathname === '/api/missions' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!String(body.client || '').trim()) return sendJSON(res, 400, { error: 'Le nom du client est obligatoire.' });
+    const mission = {
+      id: uid('msn-'),
+      client: String(body.client).trim().slice(0, 200),
+      discord: String(body.discord || '').trim().slice(0, 120),
+      domain: String(body.domain || '').trim().slice(0, 200),
+      window: String(body.window || '').trim().slice(0, 200),
+      scope: String(body.scope || '').slice(0, 4000),
+      status: 'brouillon',
+      checklist: {},
+      notes: '',
+      findings: [],
+      createdAt: new Date().toISOString(),
+    };
+    db.missions.unshift(mission);
+    saveStore();
+    return sendJSON(res, 201, { mission });
+  }
+
+  const missionMatch = /^\/api\/missions\/([\w-]+)$/.exec(pathname);
+  if (missionMatch) {
+    const mission = db.missions.find((m) => m.id === missionMatch[1]);
+    if (!mission) return sendJSON(res, 404, { error: 'Mission introuvable.' });
+
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      ['client', 'discord', 'domain', 'window'].forEach((f) => {
+        if (typeof body[f] === 'string') mission[f] = body[f].trim().slice(0, 200);
+      });
+      if (typeof body.scope === 'string') mission.scope = body.scope.slice(0, 4000);
+      if (typeof body.notes === 'string') mission.notes = body.notes.slice(0, 20000);
+      if (body.status && MISSION_STATUS_IDS.includes(body.status)) mission.status = body.status;
+      if (body.checklist && typeof body.checklist === 'object') {
+        const clean = {};
+        MISSION_CHECKLIST.forEach((_, i) => {
+          if (body.checklist[i]) clean[i] = true;
+        });
+        mission.checklist = clean;
+      }
+      if (Array.isArray(body.findings)) {
+        mission.findings = body.findings.slice(0, 100).map((f) => ({
+          title: String(f.title || '').slice(0, 200),
+          severity: SEVERITY_IDS.includes(f.severity) ? f.severity : 'info',
+          detail: String(f.detail || '').slice(0, 4000),
+        }));
+      }
+      saveStore();
+      return sendJSON(res, 200, { mission });
+    }
+
+    if (req.method === 'DELETE') {
+      db.missions = db.missions.filter((m) => m.id !== mission.id);
+      saveStore();
+      return sendJSON(res, 200, { ok: true });
+    }
   }
 
   if (pathname === '/api/password' && req.method === 'POST') {
