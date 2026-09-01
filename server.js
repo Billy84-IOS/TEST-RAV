@@ -294,28 +294,61 @@ function upstreamPath(req, upstream) {
 
 function proxyHTTP(req, res, upstream) {
   const subPath = upstreamPath(req, upstream);
-  const options = {
-    host: '127.0.0.1',
-    port: upstream.port,
-    method: req.method,
-    path: subPath,
-    headers: { ...req.headers, host: '127.0.0.1:' + upstream.port },
-  };
+  const isTarget = upstream.kind === 'target';
+  const headers = { ...req.headers, host: '127.0.0.1:' + upstream.port };
+  // Pour les cibles, on réécrit le HTML : on évite donc la compression en amont.
+  if (isTarget) headers['accept-encoding'] = 'identity';
+  const options = { host: '127.0.0.1', port: upstream.port, method: req.method, path: subPath, headers };
+
   const proxyReq = http.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(res);
+    const outHeaders = { ...proxyRes.headers };
+
+    if (isTarget && outHeaders.location) {
+      outHeaders.location = rewriteLocation(outHeaders.location, upstream);
+    }
+
+    const ct = String(outHeaders['content-type'] || '');
+    if (isTarget && ct.includes('text/html')) {
+      // On bufferise le HTML pour injecter une balise <base> : ainsi les
+      // liens relatifs de la cible (DVWA, WebGoat…) restent sous /target/<id>/.
+      delete outHeaders['content-length'];
+      const chunks = [];
+      proxyRes.on('data', (c) => chunks.push(c));
+      proxyRes.on('end', () => {
+        const html = injectBase(Buffer.concat(chunks).toString('utf8'), upstream.base + '/');
+        res.writeHead(proxyRes.statusCode, outHeaders);
+        res.end(html);
+      });
+      proxyRes.on('error', () => res.destroy());
+    } else {
+      res.writeHead(proxyRes.statusCode, outHeaders);
+      proxyRes.pipe(res);
+    }
   });
   proxyReq.on('error', () => {
     if (!res.headersSent) {
-      sendText(
-        res,
-        502,
-        'Cible injoignable. Le conteneur est-il démarré ? (onglet Labo)',
-        'text/plain; charset=utf-8'
-      );
+      sendText(res, 502, 'Cible injoignable. Le conteneur est-il démarré ? (onglet Labo)', 'text/plain; charset=utf-8');
     }
   });
   req.pipe(proxyReq);
+}
+
+function rewriteLocation(location, upstream) {
+  let loc = String(location);
+  // Adresse absolue vers la cible interne → chemin relatif au proxy.
+  loc = loc.replace(/^https?:\/\/127\.0\.0\.1:\d+/i, '');
+  if (loc.startsWith('/') && !loc.startsWith('//') && !loc.startsWith(upstream.base + '/')) {
+    return upstream.base + loc;
+  }
+  return loc;
+}
+
+function injectBase(html, baseHref) {
+  const tag = '<base href="' + baseHref + '">';
+  if (/<base\s/i.test(html)) return html; // déjà présent
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + tag);
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => m + tag);
+  return tag + html;
 }
 
 function proxyUpgrade(req, socket, head, upstream) {
