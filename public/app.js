@@ -159,15 +159,148 @@ async function renderLabo() {
 
 /* ------------------------------ onglet : terminal ------------------------------ */
 
+let termState = {};
+
+function teardownTerm() {
+  if (termState.onResize) window.removeEventListener('resize', termState.onResize);
+  if (termState.ws) {
+    try {
+      termState.ws.onclose = null;
+      termState.ws.close();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  if (termState.term) {
+    try {
+      termState.term.dispose();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  termState = {};
+}
+
 function renderTerminal() {
+  if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+    view.innerHTML = LEGAL + `<div class="empty"><div class="ic">⚠️</div>Le terminal n'a pas pu se charger (xterm manquant). Recharge la page.</div>`;
+    return;
+  }
+
   view.innerHTML =
     LEGAL +
-    `<div class="section-title"><h1>Terminal</h1></div>
-     <iframe class="term-frame" src="/terminal/" title="Terminal web"></iframe>
+    `<div class="section-title"><h1>Terminal</h1><span class="term-status badge" id="termStatus">connexion…</span></div>
+     <div class="term-host" id="termHost"></div>
+     <div class="cmdbar">
+       <input id="cmdInput" type="text" placeholder="Tape ou colle une commande, puis Envoyer" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
+       <button class="btn btn-primary" id="cmdSend">Envoyer</button>
+     </div>
+     <div class="term-controls">
+       <button class="btn btn-sm" data-key="tab">⇥ Tab</button>
+       <button class="btn btn-sm" data-key="up">↑ Précédente</button>
+       <button class="btn btn-sm" data-key="ctrlc">Ctrl-C</button>
+       <button class="btn btn-sm" data-key="clear">Effacer</button>
+       <button class="btn btn-sm" id="termReconnect">↻ Reconnecter</button>
+     </div>
      <div class="card term-hint">
-       <p class="small muted">Ce terminal tourne <b>sur ton VPS</b>. C'est là que tu lances nmap, sqlmap, tes scripts Python… Copie les commandes depuis l'onglet <b>Outils</b>.</p>
-       <p class="tiny muted" style="margin-top:8px">Écran noir ou erreur ? Le service <code class="mono">ttyd</code> n'est peut-être pas démarré : <code class="mono">sudo systemctl status hacklab-ttyd</code></p>
+       <p class="small muted">💡 Sur mobile : tape ou <b>colle</b> ta commande dans le champ ci-dessus (le coller marche là), puis <b>Envoyer</b>. Tu peux aussi écrire directement dans le terminal noir.</p>
      </div>`;
+
+  initTerm();
+}
+
+function initTerm() {
+  const host = document.getElementById('termHost');
+  const statusEl = document.getElementById('termStatus');
+  const setStatus = (txt, cls) => {
+    statusEl.textContent = txt;
+    statusEl.className = 'term-status badge ' + (cls || '');
+  };
+
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+    scrollback: 3000,
+    theme: { background: '#0d1117', foreground: '#e6edf3', cursor: '#4fd6a8', selectionBackground: '#264f78' },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  setTimeout(() => {
+    try {
+      fit.fit();
+    } catch (e) {
+      /* ignore */
+    }
+  }, 30);
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(proto + '://' + location.host + '/terminal/ws', ['tty']);
+  ws.binaryType = 'arraybuffer';
+  const dec = new TextDecoder();
+
+  const sendInput = (data) => {
+    if (ws.readyState === 1) ws.send('0' + data);
+  };
+  const sendResize = () => {
+    if (ws.readyState === 1) ws.send('1' + JSON.stringify({ columns: term.cols, rows: term.rows }));
+  };
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ AuthToken: '', columns: term.cols, rows: term.rows }));
+    sendResize();
+    setStatus('connecté', 'run');
+  };
+  ws.onmessage = (ev) => {
+    const b = new Uint8Array(ev.data);
+    if (b.length && String.fromCharCode(b[0]) === '0') term.write(dec.decode(b.subarray(1)));
+  };
+  ws.onclose = () => setStatus('déconnecté', 'stop');
+  ws.onerror = () => setStatus('erreur', 'bad');
+
+  term.onData((d) => sendInput(d));
+
+  const onResize = () => {
+    try {
+      fit.fit();
+      sendResize();
+    } catch (e) {
+      /* ignore */
+    }
+  };
+  window.addEventListener('resize', onResize);
+
+  termState = { term, ws, fit, send: sendInput, onResize };
+
+  // Barre de commande (le champ où le coller iOS fonctionne).
+  const input = document.getElementById('cmdInput');
+  const runFromInput = () => {
+    const value = input.value;
+    if (!value) {
+      sendInput('\n');
+      return;
+    }
+    sendInput(value + '\n');
+    input.value = '';
+    input.focus();
+  };
+  document.getElementById('cmdSend').onclick = runFromInput;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runFromInput();
+    }
+  });
+
+  const keys = { tab: '\t', up: '\x1b[A', ctrlc: '\x03', clear: '\x0c' };
+  view.querySelectorAll('[data-key]').forEach((btn) => {
+    btn.onclick = () => {
+      sendInput(keys[btn.dataset.key]);
+      input.focus();
+    };
+  });
+  document.getElementById('termReconnect').onclick = () => renderTerminal();
 }
 
 /* ------------------------------ onglet : parcours ------------------------------ */
@@ -363,6 +496,7 @@ function renderReglages() {
 /* ------------------------------ routeur ------------------------------ */
 
 async function renderTab() {
+  teardownTerm();
   try {
     if (currentTab === 'labo') await renderLabo();
     else if (currentTab === 'terminal') renderTerminal();
