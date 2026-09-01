@@ -15,6 +15,8 @@
 
 const http = require('http');
 const net = require('net');
+const tls = require('tls');
+const dns = require('dns').promises;
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -375,6 +377,134 @@ function proxyUpgrade(req, socket, head, upstream) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Scan passif automatisé (requêtes web bénignes, non intrusives)      */
+/* ------------------------------------------------------------------ */
+
+function isPrivateIP(ip) {
+  if (!ip) return true;
+  if (ip === '::1' || ip === '0.0.0.0') return true;
+  if (/^127\./.test(ip) || /^10\./.test(ip) || /^192\.168\./.test(ip) || /^169\.254\./.test(ip)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  if (/^f[cd]/i.test(ip) || /^fe80/i.test(ip)) return true; // IPv6 privé / lien-local
+  return false;
+}
+
+// Analyse des en-têtes HTTP — fonction pure, facile à tester.
+function analyzeHeaders(protocol, get, setCookies) {
+  const findings = [];
+  const tech = [];
+  const add = (severity, title, detail, solution) => findings.push({ severity, title, detail, solution });
+  const https = protocol === 'https:';
+
+  if (get('server')) {
+    tech.push('Serveur : ' + get('server'));
+    if (/\d/.test(get('server'))) add('faible', 'Version du serveur exposée', 'En-tête « Server: ' + get('server') + ' ».', 'Masquer la version du serveur (ex. « server_tokens off » sur Nginx).');
+  }
+  if (get('x-powered-by')) {
+    tech.push(get('x-powered-by'));
+    add('faible', 'Technologie exposée (X-Powered-By)', 'En-tête « X-Powered-By: ' + get('x-powered-by') + ' ».', "Supprimer l'en-tête X-Powered-By côté serveur.");
+  }
+  if (get('x-generator')) tech.push(get('x-generator'));
+
+  if (https && !get('strict-transport-security')) add('moyenne', 'HSTS manquant', 'En-tête Strict-Transport-Security absent : le navigateur peut être forcé en HTTP.', 'Ajouter « Strict-Transport-Security: max-age=31536000; includeSubDomains ».');
+  if (!get('content-security-policy')) add('moyenne', 'Content-Security-Policy manquante', 'Aucune CSP : la protection contre le XSS est fortement réduite.', 'Définir une Content-Security-Policy adaptée au site.');
+  if (!get('x-frame-options') && !/frame-ancestors/i.test(get('content-security-policy') || '')) add('faible', 'Protection clickjacking manquante', 'Ni X-Frame-Options ni directive frame-ancestors.', "Ajouter « X-Frame-Options: DENY » ou une directive frame-ancestors dans la CSP.");
+  if (!get('x-content-type-options')) add('faible', 'X-Content-Type-Options manquant', 'nosniff absent : risque de MIME sniffing.', 'Ajouter « X-Content-Type-Options: nosniff ».');
+  if (!get('referrer-policy')) add('info', 'Referrer-Policy manquante', 'Politique de référent non définie.', 'Ajouter « Referrer-Policy: strict-origin-when-cross-origin ».');
+
+  (setCookies || []).forEach((c) => {
+    const name = (c.split('=')[0] || 'cookie').trim();
+    const flags = c.toLowerCase();
+    const missing = [];
+    if (https && !flags.includes('secure')) missing.push('Secure');
+    if (!flags.includes('httponly')) missing.push('HttpOnly');
+    if (!flags.includes('samesite')) missing.push('SameSite');
+    if (missing.length) add('moyenne', 'Cookie peu sécurisé : ' + name, 'Attributs manquants : ' + missing.join(', ') + '.', 'Ajouter les attributs ' + missing.join(', ') + ' à ce cookie.');
+  });
+
+  return { findings, tech };
+}
+
+function fetchWithTimeout(url, options, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...options, signal: ctrl.signal, redirect: options.redirect || 'follow' }).finally(() => clearTimeout(t));
+}
+
+function getPeerCert(host, port) {
+  return new Promise((resolve) => {
+    const socket = tls.connect({ host, port: Number(port) || 443, servername: host, timeout: 6000, rejectUnauthorized: false }, () => {
+      const cert = socket.getPeerCertificate();
+      socket.end();
+      resolve(cert && cert.valid_to ? cert : null);
+    });
+    socket.on('error', () => resolve(null));
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(null);
+    });
+  });
+}
+
+async function scanTarget(rawUrl) {
+  let u;
+  try {
+    u = new URL(rawUrl);
+  } catch (e) {
+    throw new Error('URL invalide.');
+  }
+  if (!/^https?:$/.test(u.protocol)) throw new Error('Seuls http/https sont supportés.');
+
+  const addrs = await dns.lookup(u.hostname, { all: true }).catch(() => null);
+  if (!addrs || !addrs.length) throw new Error('Domaine introuvable (DNS).');
+  if (addrs.some((a) => isPrivateIP(a.address))) throw new Error('Cible interne/privée refusée (protection SSRF).');
+
+  const findings = [];
+  const tech = [];
+  const add = (severity, title, detail, solution) => findings.push({ severity, title, detail, solution });
+
+  // Redirection HTTP → HTTPS
+  if (u.protocol === 'https:') {
+    try {
+      const r = await fetchWithTimeout('http://' + u.hostname + '/', { redirect: 'manual' }, 6000);
+      const loc = r.headers.get('location') || '';
+      if (!(r.status >= 300 && r.status < 400 && /^https:/i.test(loc))) {
+        add('elevee', 'Pas de redirection HTTP → HTTPS', 'Le site répond en HTTP sans forcer le HTTPS.', 'Rediriger tout le trafic du port 80 vers HTTPS (301).');
+      }
+    } catch (e) {
+      /* HTTP peut-être fermé : tant mieux */
+    }
+  }
+
+  let res;
+  try {
+    res = await fetchWithTimeout(u.toString(), { redirect: 'follow' }, 9000);
+  } catch (e) {
+    throw new Error('Cible injoignable : ' + e.message);
+  }
+  const get = (n) => res.headers.get(n);
+  const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : (get('set-cookie') ? [get('set-cookie')] : []);
+  const analysis = analyzeHeaders(u.protocol, get, setCookies);
+  analysis.findings.forEach((f) => findings.push(f));
+  analysis.tech.forEach((t) => tech.push(t));
+
+  // Certificat TLS
+  if (u.protocol === 'https:') {
+    const cert = await getPeerCert(u.hostname, u.port || 443);
+    if (cert) {
+      const exp = Date.parse(cert.valid_to);
+      const now = Date.now();
+      if (exp < now) add('elevee', 'Certificat TLS expiré', 'Expiré le ' + cert.valid_to + '.', 'Renouveler immédiatement le certificat.');
+      else if (exp - now < 15 * 86400000) add('moyenne', 'Certificat TLS bientôt expiré', 'Expire le ' + cert.valid_to + '.', 'Renouveler le certificat (Let’s Encrypt automatise le renouvellement).');
+    }
+  }
+
+  if (!findings.length) add('info', 'Aucun problème passif détecté', 'Le scan passif (en-têtes, HTTPS, cookies, TLS) n’a rien relevé.', 'Poursuivre par des tests actifs autorisés (nmap, nuclei) depuis une machine autorisée.');
+
+  return { findings, tech };
+}
+
+/* ------------------------------------------------------------------ */
 /* API                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -507,10 +637,11 @@ async function handleAPI(req, res, pathname) {
         mission.checklist = clean;
       }
       if (Array.isArray(body.findings)) {
-        mission.findings = body.findings.slice(0, 100).map((f) => ({
+        mission.findings = body.findings.slice(0, 200).map((f) => ({
           title: String(f.title || '').slice(0, 200),
           severity: SEVERITY_IDS.includes(f.severity) ? f.severity : 'info',
           detail: String(f.detail || '').slice(0, 4000),
+          solution: String(f.solution || '').slice(0, 2000),
         }));
       }
       saveStore();
@@ -521,6 +652,36 @@ async function handleAPI(req, res, pathname) {
       db.missions = db.missions.filter((m) => m.id !== mission.id);
       saveStore();
       return sendJSON(res, 200, { ok: true });
+    }
+  }
+
+  const scanMatch = /^\/api\/missions\/([\w-]+)\/scan$/.exec(pathname);
+  if (scanMatch && req.method === 'POST') {
+    const mission = db.missions.find((m) => m.id === scanMatch[1]);
+    if (!mission) return sendJSON(res, 404, { error: 'Mission introuvable.' });
+    if (Object.keys(mission.checklist || {}).length < MISSION_CHECKLIST.length) {
+      return sendJSON(res, 403, { error: 'Coche toute la checklist (autorisation) avant de scanner.' });
+    }
+    let url = (mission.domain || '').trim();
+    if (!url) return sendJSON(res, 400, { error: 'Renseigne le domaine de la mission.' });
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    try {
+      const { findings, tech } = await scanTarget(url);
+      // Fusion dans les failles de la mission (dédup par titre).
+      const existing = new Set((mission.findings || []).map((f) => f.title));
+      let added = 0;
+      findings.forEach((f) => {
+        if (f.severity === 'info' && f.title.startsWith('Aucun')) return;
+        if (!existing.has(f.title)) {
+          mission.findings.push(f);
+          existing.add(f.title);
+          added++;
+        }
+      });
+      saveStore();
+      return sendJSON(res, 200, { findings, tech, added, mission });
+    } catch (e) {
+      return sendJSON(res, 400, { error: e.message });
     }
   }
 

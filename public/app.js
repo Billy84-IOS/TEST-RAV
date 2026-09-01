@@ -573,7 +573,8 @@ function genReport(m) {
     m.findings.forEach((f, i) => {
       out +=
         '\n[' + severityMeta(f.severity).label.toUpperCase() + '] ' + (i + 1) + '. ' + (f.title || 'Sans titre') + '\n' +
-        'Description : ' + (f.detail || '(à compléter)') + '\n';
+        'Description : ' + (f.detail || '(à compléter)') + '\n' +
+        (f.solution ? 'Correctif   : ' + f.solution + '\n' : '');
     });
   }
   out +=
@@ -683,6 +684,7 @@ function renderMissionDetail(m) {
           <button class="btn btn-sm btn-danger" data-del-finding="${i}">Retirer</button></div>
         <div style="font-weight:650;margin-top:8px">${esc(f.title || 'Sans titre')}</div>
         <div class="small muted" style="margin-top:4px;white-space:pre-wrap">${esc(f.detail || '')}</div>
+        ${f.solution ? `<div class="small" style="margin-top:6px"><span style="color:var(--ok)">✔ Solution :</span> ${esc(f.solution)}</div>` : ''}
       </div>`
     )
     .join('');
@@ -749,9 +751,19 @@ function renderMissionDetail(m) {
     renderMissions();
   };
 
-  view.querySelectorAll('[data-recon]').forEach((b) => {
-    b.onclick = () => goTerminalWith(b.dataset.recon);
+  view.querySelectorAll('[data-copy-cmd]').forEach((b) => {
+    b.onclick = () => {
+      navigator.clipboard.writeText(b.dataset.copyCmd).then(
+        () => toast('Commande copiée — colle-la sur ta machine autorisée'),
+        () => toast('Copie impossible')
+      );
+    };
   });
+
+  const scanBtn = document.getElementById('ms-scan');
+  if (scanBtn) {
+    scanBtn.onclick = () => runMissionScan(m);
+  }
 
   // Coche/décoche : sauvegarde immédiate.
   view.querySelectorAll('[data-check]').forEach((cb) => {
@@ -822,6 +834,75 @@ function renderMissionDetail(m) {
   };
 }
 
+async function runMissionScan(m) {
+  const btn = document.getElementById('ms-scan');
+  const prog = document.getElementById('ms-scan-progress');
+  const fill = document.getElementById('ms-scan-fill');
+  const pct = document.getElementById('ms-scan-pct');
+  const step = document.getElementById('ms-scan-step');
+  const resultEl = document.getElementById('ms-scan-result');
+
+  btn.disabled = true;
+  prog.classList.remove('hidden');
+  resultEl.classList.add('hidden');
+
+  const steps = ['Résolution DNS…', 'Requête HTTPS…', 'Analyse des en-têtes…', 'Vérification du certificat TLS…'];
+  let p = 0;
+  let si = 0;
+  step.textContent = steps[0];
+  const timer = setInterval(() => {
+    p = Math.min(92, p + 4 + Math.random() * 6);
+    fill.style.width = p + '%';
+    pct.textContent = Math.round(p) + '%';
+    si = Math.min(steps.length - 1, Math.floor((p / 92) * steps.length));
+    step.textContent = steps[si];
+  }, 220);
+
+  try {
+    const data = await api('/api/missions/' + m.id + '/scan', { method: 'POST' });
+    clearInterval(timer);
+    fill.style.width = '100%';
+    pct.textContent = '100%';
+    step.textContent = 'Terminé';
+
+    if (data.mission) m.findings = data.mission.findings;
+
+    const order = { critique: 0, elevee: 1, moyenne: 2, faible: 3, info: 4 };
+    const sorted = [...data.findings].sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
+    const counts = {};
+    data.findings.forEach((f) => (counts[f.severity] = (counts[f.severity] || 0) + 1));
+    const summary = missionsData.severities
+      .filter((s) => counts[s.id])
+      .map((s) => `<span class="badge badge-${s.tone}">${counts[s.id]} ${esc(s.label.toLowerCase())}</span>`)
+      .join(' ');
+
+    resultEl.innerHTML =
+      `<div class="spread" style="margin-bottom:10px"><b>Résultat du scan</b><span>${summary || '<span class="badge">RAS</span>'}</span></div>` +
+      sorted
+        .map(
+          (f) => `
+        <div class="card" style="padding:12px;margin-bottom:8px">
+          <div class="row" style="gap:8px"><span class="badge badge-${severityMeta(f.severity).tone}">${esc(severityMeta(f.severity).label)}</span><b style="font-size:0.92rem">${esc(f.title)}</b></div>
+          <div class="small muted" style="margin-top:6px">${esc(f.detail || '')}</div>
+          ${f.solution ? `<div class="small" style="margin-top:6px"><span style="color:var(--ok)">✔ Solution :</span> ${esc(f.solution)}</div>` : ''}
+        </div>`
+        )
+        .join('');
+    resultEl.classList.remove('hidden');
+    toast(data.added ? data.added + ' faille(s) ajoutée(s) au rapport' : 'Scan terminé');
+    setTimeout(() => {
+      prog.classList.add('hidden');
+    }, 800);
+  } catch (e) {
+    clearInterval(timer);
+    prog.classList.add('hidden');
+    resultEl.classList.remove('hidden');
+    resultEl.innerHTML = `<div class="legal" style="margin:0">⚠️<div>${esc(e.message)}</div></div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderReconSection(m, allChecked) {
   const recon = reconCommands(m);
   if (!allChecked) {
@@ -836,16 +917,21 @@ function renderReconSection(m, allChecked) {
        <p class="small muted" style="margin-top:8px">Renseigne le domaine de la cible plus haut pour activer les boutons.</p>
      </div>`;
   }
-  const btns = (arr) =>
-    arr.map((c) => `<button class="btn btn-sm" data-recon="${esc(c.cmd)}">${esc(c.label)}</button>`).join('');
+  const copyBtns = (arr) =>
+    arr.map((c) => `<button class="btn btn-sm" data-copy-cmd="${esc(c.cmd)}">${esc(c.label)}</button>`).join('');
   return `<div class="card" style="margin-bottom:12px">
-     <h2>Reconnaissance</h2>
-     <p class="tiny muted" style="margin:6px 0 10px">Un bouton prépare la commande dans le Terminal (avec le domaine déjà rempli). Tu vérifies, puis tu tapes Envoyer.</p>
-     <div class="lbl" style="margin-bottom:6px">Passif (sans risque)</div>
-     <div class="btn-row">${btns(recon.passives)}</div>
-     <div class="lbl" style="margin:14px 0 6px">Actif — nécessite l'autorisation écrite + une machine autorisée</div>
-     <div class="legal" style="margin:0 0 8px;padding:8px 10px;font-size:0.78rem">⚠️<div>Ne lance ces scans QUE depuis une machine autorisée. Depuis ton VPS, ton hébergeur peut te couper.</div></div>
-     <div class="btn-row">${btns(recon.actives)}</div>
+     <h2>Scan automatique</h2>
+     <p class="tiny muted" style="margin:6px 0 10px">Analyse passive de la cible (en-têtes, HTTPS, cookies, certificat) — requêtes web normales, sans risque. Les failles se remplissent toutes seules ci-dessous.</p>
+     <button class="btn btn-primary btn-block" id="ms-scan">▶ Lancer le scan automatique</button>
+     <div id="ms-scan-progress" class="hidden" style="margin-top:12px">
+       <div class="spread"><span class="small" id="ms-scan-step">Préparation…</span><span class="mono small muted" id="ms-scan-pct">0%</span></div>
+       <div class="progress-bar"><div class="progress-fill" id="ms-scan-fill" style="width:0%"></div></div>
+     </div>
+     <div id="ms-scan-result" class="hidden" style="margin-top:12px"></div>
+
+     <div class="lbl" style="margin:18px 0 6px">Tests actifs — à copier, uniquement depuis une machine autorisée</div>
+     <div class="legal" style="margin:0 0 8px;padding:8px 10px;font-size:0.78rem">⚠️<div>nmap / nuclei / ffuf frappent le serveur. Ne les lance PAS depuis ton VPS (coupure possible). Copie et exécute depuis une machine autorisée.</div></div>
+     <div class="btn-row">${copyBtns(recon.actives)}</div>
    </div>`;
 }
 
