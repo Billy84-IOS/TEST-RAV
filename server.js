@@ -425,10 +425,14 @@ function analyzeHeaders(protocol, get, setCookies) {
   return { findings, tech };
 }
 
+const SCAN_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
 function fetchWithTimeout(url, options, ms) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...options, signal: ctrl.signal, redirect: options.redirect || 'follow' }).finally(() => clearTimeout(t));
+  const headers = { 'User-Agent': SCAN_UA, Accept: '*/*', ...(options.headers || {}) };
+  return fetch(url, { ...options, headers, signal: ctrl.signal, redirect: options.redirect || 'follow' }).finally(() => clearTimeout(t));
 }
 
 function getPeerCert(host, port) {
@@ -479,8 +483,19 @@ async function scanTarget(rawUrl) {
   let res;
   try {
     res = await fetchWithTimeout(u.toString(), { redirect: 'follow' }, 9000);
-  } catch (e) {
-    throw new Error('Cible injoignable : ' + e.message);
+  } catch (e1) {
+    // Repli : beaucoup de petits sites sont en HTTP seul, ou ont un certificat cassé.
+    if (u.protocol === 'https:') {
+      try {
+        res = await fetchWithTimeout('http://' + u.hostname + u.pathname, { redirect: 'follow' }, 9000);
+        u.protocol = 'http:';
+        add('elevee', 'Site accessible en HTTP', "La cible n'a pas répondu en HTTPS mais répond en HTTP : trafic non chiffré.", 'Installer un certificat TLS (Let’s Encrypt, gratuit) et forcer le HTTPS.');
+      } catch (e2) {
+        throw new Error("Cible injoignable. Vérifie le domaine (fautes, site en ligne ?). Un pare-feu type Cloudflare peut aussi bloquer le scan.");
+      }
+    } else {
+      throw new Error("Cible injoignable. Vérifie le domaine (fautes, site en ligne ?).");
+    }
   }
   const get = (n) => res.headers.get(n);
   const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : (get('set-cookie') ? [get('set-cookie')] : []);
