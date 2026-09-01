@@ -569,6 +569,27 @@ async function callNocturai(message) {
   if (!res) throw new Error('API nocturai a refusé toutes les formes de requête. Dernier message : ' + lastText.slice(0, 200));
 
   const text = lastText;
+
+  // Réponse en flux (Server-Sent Events) : on recolle les morceaux « delta ».
+  if (/^data:/m.test(text)) {
+    const parts = [];
+    text.split(/\r?\n/).forEach((line) => {
+      line = line.trim();
+      if (!line.startsWith('data:')) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      try {
+        const j = JSON.parse(payload);
+        const ch = j.choices && j.choices[0];
+        const c = ch && (ch.delta ? ch.delta.content : ch.message ? ch.message.content : ch.text);
+        if (c) parts.push(c);
+      } catch (e) {
+        /* ligne partielle : on ignore */
+      }
+    });
+    if (parts.length) return parts.join('');
+  }
+
   let data;
   try {
     data = JSON.parse(text);
